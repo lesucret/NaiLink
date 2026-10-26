@@ -40,6 +40,8 @@ func TestNativeRejectsSystemAccessExternalDetoursAndCycles(t *testing.T) {
 		`{"type":"ssh","server":"example.com","server_port":22,"protect_path":"/tmp/unix-socket"}`,
 		`{"type":"shadowsocks","server":"example.com","server_port":443,"plugin":{}}`,
 		`{"type":"ssh","server":"example.com","server_port":22,"detour":"direct"}`,
+		`{"type":"ssh","server":"example.com","server_port":22,"Detour":"direct"}`,
+		`{"type":"ssh","server":"example.com","server_port":22,"deTour":"direct"}`,
 		`{"type":"ssh","tag":"a","server":"example.com","server_port":22,"detour":"a"}`,
 		`{"outbounds":[{"type":"ssh","server":"example.com","server_port":22}],"inbounds":[]}`,
 		`{"type":"wireguard","server":"example.com","server_port":443}`,

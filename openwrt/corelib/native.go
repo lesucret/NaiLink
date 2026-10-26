@@ -54,6 +54,13 @@ func NativeNode(link, tag string) (Object, error) {
 	names := map[string]string{}
 	original := map[string]Object{}
 	for i, o := range list {
+		// The native JSON decoder matches field names without case. An alias
+		// must not escape the closed-detour namespace enforced below.
+		for key := range o {
+			if strings.EqualFold(key, "detour") && key != "detour" {
+				return nil, errors.New("unsupported_native_field")
+			}
+		}
 		for _, key := range []string{"inbounds", "outbounds", "route", "dns", "log", "experimental", "services", "endpoints"} {
 			if _, exists := o[key]; exists {
 				return nil, errors.New("unsupported_native_section")
