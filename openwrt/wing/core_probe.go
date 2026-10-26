@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -281,46 +282,12 @@ func ProbeRouterCoreNodes(ctx context.Context, links []string, global daeConfig.
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			started := time.Now()
-			request, err := http.NewRequestWithContext(ctx, "HEAD", global.TcpCheckUrl[0], nil)
-			result := RouterCoreProbe{Tested: time.Now(), Message: "test_failed"}
-			if err == nil {
-				dialer, dialErr := proxy.SOCKS5("tcp", routercore.SocksAddress(session.ports.Mixed), &proxy.Auth{User: name, Password: session.ports.Secret}, &net.Dialer{Timeout: 8 * time.Second})
-				if dialErr != nil {
-					results[index] = result
-					return
-				}
-				transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-					if len(global.TcpCheckUrl) > 1 {
-						host, port, e := net.SplitHostPort(address)
-						parsed, e2 := url.Parse(global.TcpCheckUrl[0])
-						if e == nil && e2 == nil && host == parsed.Hostname() && net.ParseIP(global.TcpCheckUrl[1]) != nil {
-							address = net.JoinHostPort(global.TcpCheckUrl[1], port)
-						}
-					}
-					return dialer.(proxy.ContextDialer).DialContext(ctx, network, address)
-				}}
-				defer transport.CloseIdleConnections()
-				response, err := (&http.Client{Transport: transport, Timeout: 10 * time.Second}).Do(request)
-				if err != nil {
-					result.Message = routerCoreProbeFailure(err)
-				}
-				if err == nil {
-					defer response.Body.Close()
-					if response.StatusCode >= 200 && response.StatusCode < 500 {
-						result.Alive = true
-						result.Latency = int32(time.Since(started).Milliseconds())
-						result.Message = ""
-					} else {
-						result.Message = "check_target_failed"
-					}
-				}
+			dialer, err := proxy.SOCKS5("tcp", routercore.SocksAddress(session.ports.Mixed), &proxy.Auth{User: name, Password: session.ports.Secret}, &net.Dialer{Timeout: 8 * time.Second})
+			if err != nil {
+				results[index] = RouterCoreProbe{Tested: time.Now(), Message: "test_failed"}
+				return
 			}
-			if ctx.Err() != nil {
-				result.Message = routerCoreProbeFailure(ctx.Err())
-			}
-			result.Tested = time.Now()
-			results[index] = result
+			results[index] = routerProbeHTTP(ctx, dialer.(proxy.ContextDialer), global)
 		}()
 	}
 	workers.Wait()
@@ -333,6 +300,84 @@ func ProbeRouterCoreNodes(ctx context.Context, links []string, global daeConfig.
 		}
 	}
 	return results, nil
+}
+
+// Match dae's explicit HTTP test: race the resolved IPv4/IPv6 targets using
+// fresh connections, preserve Host/TLS SNI, and include the entire request's
+// connection/handshake time. Starting the private core is outside this timer.
+func routerProbeHTTP(ctx context.Context, dialer proxy.ContextDialer, global daeConfig.Global) RouterCoreProbe {
+	result := RouterCoreProbe{Tested: time.Now(), Message: "check_target_failed"}
+	if len(global.TcpCheckUrl) == 0 {
+		return result
+	}
+	target, err := url.Parse(global.TcpCheckUrl[0])
+	if err != nil || target.Hostname() == "" || (target.Scheme != "http" && target.Scheme != "https") {
+		return result
+	}
+	method := global.TcpCheckHttpMethod
+	if method == "" {
+		method = http.MethodGet
+	}
+	var addresses []string
+	seen := map[string]bool{}
+	for _, value := range global.TcpCheckUrl[1:] {
+		if ip := net.ParseIP(value); ip != nil && !seen[ip.String()] {
+			addresses = append(addresses, ip.String())
+			seen[ip.String()] = true
+		}
+	}
+	if len(addresses) == 0 {
+		addresses = []string{target.Hostname()}
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	started := time.Now()
+	completed := make(chan RouterCoreProbe, len(addresses))
+	for _, address := range addresses {
+		go func() {
+			r := RouterCoreProbe{Message: "check_target_failed"}
+			transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(ctx context.Context, network, original string) (net.Conn, error) {
+				host, port, err := net.SplitHostPort(original)
+				if err == nil && host == target.Hostname() {
+					original = net.JoinHostPort(address, port)
+				}
+				return dialer.DialContext(ctx, network, original)
+			}}
+			defer transport.CloseIdleConnections()
+			request, err := http.NewRequestWithContext(probeCtx, method, target.String(), nil)
+			if err == nil {
+				response, err := (&http.Client{Transport: transport}).Do(request)
+				if err != nil {
+					r.Message = routerCoreProbeFailure(err)
+				} else {
+					_ = response.Body.Close()
+					valid := response.StatusCode >= 200 && response.StatusCode < 500
+					if page := path.Base(target.Path); strings.HasPrefix(page, "generate_") {
+						valid = strconv.Itoa(response.StatusCode) == strings.TrimPrefix(page, "generate_")
+					}
+					if valid {
+						r.Alive, r.Message = true, ""
+						r.Latency = int32(time.Since(started).Milliseconds())
+					}
+				}
+			}
+			r.Tested = time.Now()
+			completed <- r
+		}()
+	}
+	for range addresses {
+		r := <-completed
+		if !result.Alive && r.Alive {
+			result = r
+			cancel()
+		} else if !result.Alive {
+			result = r
+		}
+	}
+	if ctx.Err() != nil {
+		result.Alive, result.Message = false, routerCoreProbeFailure(ctx.Err())
+	}
+	return result
 }
 
 type routerProbeErrors struct {

@@ -351,7 +351,9 @@ func _fetchLinksContext(ctx context.Context, subscriptionLink string, transport 
         "dae-core/common/subscription/subscription.go": ("c48c3a14937aac13fde5d10af24e6d5774c6b5d2f09f8f23872201c06dcdd05f", lambda value: value.replace('url.Values{"plugin": []string{server.PluginOpts}}.Encode()', 'routerSIP008Plugin(server.Plugin, server.PluginOpts)', 1)),
         "dae/runtime.go": ("582676a55373d44220dced8552f094482d7d35a423d13de98ae0865cbe687062", lambda value: (HERE / "wing/runtime.go").read_text(encoding="utf-8")),
         "graphql/service/node/latency_mutation_utils.go": ("b7e722f4c24dd9606fceaf310daf285b30b8d878413ca20702970ef3b4ca805d", lambda value: (HERE / "wing/node_latency.go").read_text(encoding="utf-8")),
-        "graphql/service/node/latency_cache.go": ("4d4fd03249c617bcc9fccb508dbc2d567fa74557dd5900ee046cbf307ff64831", lambda value: value.replace('if err := refreshLatencyCacheIfNeeded(ctx); err != nil {\n\t\treturn nil, err\n\t}', '// Reading results must never start network probes.').replace('if _, ok := merged[id]; !ok {', 'if cached, ok := merged[id]; !ok || resolver.TestedAtV.After(cached.TestedAtV) {')),
+        "graphql/service/node/latency_resolver.go": ("afdc8eb89632429bfa0ee7106af06ee2176993ca889adb125c816bcf9b57a64b", lambda value: (HERE / "wing/node_latency_resolver.go").read_text(encoding="utf-8")),
+        "graphql/service/node/schema.go": ("00484e6a38c9de8dd7cd1b2c4ab179b0ec70cba4dbae54276bbfa2913308d56f", lambda value: value.replace('message: String\n}', 'message: String\n\tsource: String!\n}')),
+        "graphql/service/node/latency_cache.go": ("4d4fd03249c617bcc9fccb508dbc2d567fa74557dd5900ee046cbf307ff64831", lambda value: value.replace('if err := refreshLatencyCacheIfNeeded(ctx); err != nil {\n\t\treturn nil, err\n\t}', '// Reading results must never start network probes.')),
         "graphql/mutation.go": ("90a8f23ac625f2d3adf79f7f236d40b6529e2857028cc5ed02f02c0e111ee8ef", lambda value: value.replace('TestNodeLatencies(args *struct', 'TestNodeLatencies(ctx context.Context, args *struct').replace('node.TestLatencies(context.TODO(), args.IDs)', 'node.TestLatencies(ctx, args.IDs)')),
         "graphql/root_schema.go": ("e9cf4836080bf087a0ddba58ed9596abc6e020e437c828d5f718932906b3bef0", lambda value: value.replace('type Mutation {', '''type NodeUdpTest {
     id: ID!
@@ -372,8 +374,8 @@ type Mutation {
             data = transform(data.decode()).encode()
         elif previous.get(relative) != digest(data):
             raise ValueError("Unknown backend source; refusing to overwrite: " + relative)
-        elif relative in ("graphql/service/node/latency_mutation_utils.go", "dae/runtime.go", "dae/httpclient.go", "dae-core/component/interface_manager.go"):
-            replacement = "node_latency.go" if relative.endswith("latency_mutation_utils.go") else relative.split("/")[-1]
+        elif relative in ("graphql/service/node/latency_mutation_utils.go", "graphql/service/node/latency_resolver.go", "dae/runtime.go", "dae/httpclient.go", "dae-core/component/interface_manager.go"):
+            replacement = {"latency_mutation_utils.go": "node_latency.go", "latency_resolver.go": "node_latency_resolver.go"}.get(relative.split("/")[-1], relative.split("/")[-1])
             data = (HERE / "wing" / replacement).read_bytes()
         elif relative in ("cmd/run.go", "dae/run.go") or transform in (router_transactions, router_control_dial, router_dns_recovery, router_dns_transport, router_bootstrap, router_udp_pool_test):
             data = transform(data.decode()).encode()
@@ -478,6 +480,7 @@ type Mutation {
         cache_text = cache_text.replace('func storeLatencyResults(results []*LatencyResolver) {\n\tnodeLatencyCache.mu.Lock()\n\tdefer nodeLatencyCache.mu.Unlock()', 'func storeLatencyResults(results []*LatencyResolver) {\n\tnodeLatencyCache.mu.Lock()\n\tdefer nodeLatencyCache.mu.Unlock()\n\tsyncLatencyCacheCore()')
     cache_text = cache_text.replace('// Reading results must never start network probes.', '// Reading results must never start network probes.\n\tbefore := latencyCacheEntriesBeforeQuery(ids)') if 'before := latencyCacheEntriesBeforeQuery(ids)' not in cache_text else cache_text
     cache_text = cache_text.replace('merged := snapshotCachedLatencyResults()', 'merged := latencyCacheForNodes(nodes, ids == nil, before)')
+    cache_text = re.sub(r'for id, resolver := range runtimeResults \{\n\t\tif [^\n]+\n\t\t\tmerged\[id\] = resolver\n\t\t}\n\t}', 'mergeRuntimeLatencyResults(merged, runtimeResults)', cache_text)
     cache_file.write_text(cache_text, encoding="utf-8", newline="\n")
     generated["graphql/service/node/latency_cache.go"] = digest(cache_text.encode())
     # Shared recovery helpers apply to both real traffic and routed API dials.
@@ -539,6 +542,7 @@ def prepare(root):
         "graphql/service/dns/mutation_utils.go", "graphql/service/routing/mutation_utils.go",
         "graphql/service/group/mutation_utils.go", "graphql/service/node/mutation_utils.go",
         "graphql/service/node/latency_mutation_utils.go", "graphql/service/node/latency_cache.go",
+        "graphql/service/node/latency_resolver.go", "graphql/service/node/schema.go",
         "graphql/service/subscription/mutation_utils.go",
         "dae-core/component/outbound/dialer/dialer.go", "dae-core/component/outbound/dialer/register.go",
         "dae-core/component/interface_manager.go",

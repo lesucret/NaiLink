@@ -1,6 +1,8 @@
 import type { useLatencyTests } from '~/hooks/useLatencyTests'
+import { CircleHelp } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from './ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 
 export type LatencyTests = ReturnType<typeof useLatencyTests>
 
@@ -15,12 +17,24 @@ export function LatencyStatus({ tests, scope }: { tests: LatencyTests; scope: st
           role="status"
           aria-live="polite"
         >
-          <span className="tabular-nums">
-            {t(
-              tests.busy ? 'latency.progress' : tests.remaining ? 'latency.paused' : 'latency.completed',
-              tests.progress,
-            )}
-          </span>
+          <div className="flex items-center gap-1">
+            <span className="tabular-nums">
+              {t(
+                tests.busy ? 'latency.progress' : tests.remaining ? 'latency.paused' : 'latency.completed',
+                tests.progress,
+              )}
+            </span>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button size="icon" variant="ghost" className="size-8" aria-label={t('latency.measurementDetails')}>
+                  <CircleHelp className="size-4" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="max-w-[calc(100vw-2rem)] text-xs">
+                {t('latency.measurementHint')}
+              </PopoverContent>
+            </Popover>
+          </div>
           <div className="flex flex-wrap gap-2">
             {tests.busy ? (
               <Button size="sm" variant="outline" onClick={tests.stop} disabled={tests.stopping}>

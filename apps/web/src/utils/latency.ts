@@ -5,6 +5,13 @@ export function hasMeasuredLatency(result?: NodeLatencyProbeResult) {
   return result?.alive === true && Number.isFinite(result.latencyMs) && result.latencyMs! >= 0
 }
 
+export function formatLatencyDescription(result: NodeLatencyProbeResult | undefined, t: TFunction) {
+  if (!result) return undefined
+  const source = t(result.source === 'automatic' ? 'latency.automaticDescription' : 'latency.manualDescription')
+  const time = result.testedAt ? new Date(result.testedAt).toLocaleString() : ''
+  return time ? `${source} · ${time}` : source
+}
+
 export function latencyTone(result?: NodeLatencyProbeResult): 'good' | 'warning' | 'bad' | 'unmeasured' {
   if (!result) return 'unmeasured'
   if (result.alive === false) return 'bad'

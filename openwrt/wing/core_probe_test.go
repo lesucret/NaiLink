@@ -6,11 +6,107 @@ import (
 	"errors"
 	"github.com/sirupsen/logrus"
 	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	daeConfig "github.com/daeuniverse/dae/config"
 )
+
+type routerProbeDialFunc func(context.Context, string, string) (net.Conn, error)
+
+func (f routerProbeDialFunc) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	return f(ctx, network, address)
+}
+
+func TestRouterCoreHTTPRacesFixedTargetsAndHonorsMethod(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		t.Run(method, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != method || r.Host != "check.invalid" {
+					t.Error("test changed HTTP method or Host", r.Method, r.Host)
+				}
+				w.WriteHeader(204)
+			}))
+			defer server.Close()
+			cancelled := make(chan struct{}, 1)
+			dial := routerProbeDialFunc(func(ctx context.Context, _, address string) (net.Conn, error) {
+				switch address {
+				case "192.0.2.1:80":
+					<-ctx.Done()
+					cancelled <- struct{}{}
+					return nil, ctx.Err()
+				case "[2001:db8::1]:80":
+					return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+				default:
+					t.Error("fixed test IP was not used", address)
+					return nil, errors.New("unexpected target")
+				}
+			})
+			ctx, stop := context.WithTimeout(context.Background(), time.Second)
+			defer stop()
+			result := routerProbeHTTP(ctx, dial, daeConfig.Global{TcpCheckUrl: []string{"http://check.invalid/generate_204", "192.0.2.1", "2001:db8::1"}, TcpCheckHttpMethod: method})
+			if !result.Alive || result.Message != "" || len(cancelled) != 1 {
+				t.Fatal("working second family lost or failed family leaked", result)
+			}
+		})
+	}
+}
+
+func TestRouterCoreHTTPPreservesRealConnectionCostAndStatus(t *testing.T) {
+	var mu sync.Mutex
+	connections := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(25 * time.Millisecond)
+		w.WriteHeader(204)
+	}))
+	defer server.Close()
+	dial := routerProbeDialFunc(func(ctx context.Context, _, _ string) (net.Conn, error) {
+		mu.Lock()
+		connections++
+		mu.Unlock()
+		select {
+		case <-time.After(40 * time.Millisecond):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+	})
+	global := daeConfig.Global{TcpCheckUrl: []string{"http://check.invalid/generate_204", "192.0.2.1"}}
+	for range 2 {
+		r := routerProbeHTTP(context.Background(), dial, global)
+		if !r.Alive || r.Latency < 60 {
+			t.Fatal("connection/handshake time was omitted", r)
+		}
+	}
+	mu.Lock()
+	if connections != 2 {
+		t.Error("manual tests reused a connection", connections)
+	}
+	mu.Unlock()
+	global.TcpCheckUrl[0] = "http://check.invalid/generate_200"
+	if r := routerProbeHTTP(context.Background(), dial, global); r.Alive || r.Message != "check_target_failed" {
+		t.Fatal("unexpected status accepted as healthy", r)
+	}
+}
+
+func TestRouterCoreHTTPParentCancellation(t *testing.T) {
+	ctx, stop := context.WithCancel(context.Background())
+	stop()
+	dial := routerProbeDialFunc(func(ctx context.Context, _, _ string) (net.Conn, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	result := routerProbeHTTP(ctx, dial, daeConfig.Global{TcpCheckUrl: []string{"http://check.invalid", "192.0.2.1", "2001:db8::1"}})
+	if result.Alive || result.Message != "cancelled" {
+		t.Fatal(result)
+	}
+}
 
 func TestRouterCoreProbeFailureDoesNotHideTimeoutOrLeakValues(t *testing.T) {
 	for _, c := range []struct {

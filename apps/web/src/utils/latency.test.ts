@@ -1,7 +1,7 @@
 import type { TFunction } from 'i18next'
 import type { NodeLatencyProbeResult } from '~/apis'
 import { describe, expect, it } from 'vitest'
-import { formatLatencyLabel, hasMeasuredLatency, latencyTone } from './latency'
+import { formatLatencyDescription, formatLatencyLabel, hasMeasuredLatency, latencyTone } from './latency'
 
 const measured = (latencyMs: number): NodeLatencyProbeResult => ({
   id: 'fixture',
@@ -10,6 +10,19 @@ const measured = (latencyMs: number): NodeLatencyProbeResult => ({
   testedAt: '',
 })
 describe('latency colors', () => {
+  it('distinguishes automatic and manual measurements without changing their numbers', () => {
+    const translate = ((key: string) => key) as TFunction
+    expect(formatLatencyDescription({ ...measured(180), source: 'manual' }, translate)).toBe(
+      'latency.manualDescription',
+    )
+    expect(formatLatencyDescription({ ...measured(30), source: 'automatic' }, translate)).toBe(
+      'latency.automaticDescription',
+    )
+    expect(formatLatencyDescription(measured(180), translate)).toBe('latency.manualDescription')
+    expect(formatLatencyDescription(undefined, translate)).toBeUndefined()
+    expect(formatLatencyLabel({ ...measured(180), source: 'manual' }, translate)).toBe('180 ms')
+    expect(formatLatencyLabel({ ...measured(30), source: 'automatic' }, translate)).toBe('30 ms')
+  })
   it('only renders known failure categories and never echoes arbitrary backend text', () => {
     const translate = ((key: string) => key) as TFunction
     expect(formatLatencyLabel({ ...measured(0), alive: false, message: 'tls_failed' }, translate)).toBe(

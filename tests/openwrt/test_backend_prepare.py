@@ -23,6 +23,8 @@ SOURCES = (
     "graphql/service/subscription/mutation_utils.go",
     "graphql/service/node/latency_mutation_utils.go",
     "graphql/service/node/latency_cache.go",
+    "graphql/service/node/latency_resolver.go",
+    "graphql/service/node/schema.go",
     "graphql/mutation.go",
     "graphql/root_schema.go",
     "dae/runtime.go",
@@ -53,6 +55,10 @@ class BackendPrepareTests(unittest.TestCase):
     def test_runtime_patch_is_reproducible_and_idempotent(self):
         PREPARE.prepare(self.root)
         self.assertIn('routerFileServer(webFS.', (self.root / "webrender/webrender.go").read_text(encoding="utf-8"))
+        cache = (self.root / "graphql/service/node/latency_cache.go").read_text(encoding="utf-8")
+        self.assertIn('mergeRuntimeLatencyResults(merged, runtimeResults)', cache)
+        self.assertNotIn('resolver.TestedAtV.After', cache)
+        self.assertIn('source: String!', (self.root / "graphql/service/node/schema.go").read_text(encoding="utf-8"))
         self.assertEqual((self.root / "webrender/router_assets.go").read_bytes(), (ROOT / "openwrt/wing/web_assets.go").read_bytes())
         self.assertIn("return routerCheckConn(conn), nil", (self.root / "dae-core/component/outbound/dialer/dialer.go").read_text(encoding="utf-8"))
         self.assertEqual((self.root / "dae/runtime.go").read_bytes(), (ROOT / "openwrt/wing/runtime.go").read_bytes())

@@ -229,6 +229,7 @@ export function useNodeLatenciesQuery(refetchIntervalMs: number, enabled = true)
               alive
               testedAt
               message
+              source
             }
           }
         `,

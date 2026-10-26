@@ -29,6 +29,36 @@ async function waitText(locator, pattern) {
   }
   assert.match(await locator.textContent(), pattern)
 }
+async function checkManualLatency(page, context, touch, screenshot) {
+  await page.goto(`${base}/cgi-bin/luci/admin/services/daed/resources`)
+  const frame = page.frameLocator('iframe')
+  await frame.locator('[data-workspace="resources"]').waitFor({ timeout: 45000 })
+  const test = frame.getByRole('button', { name: '测试节点延迟 Preserved node', exact: true })
+  if (touch) await test.tap()
+  else await test.click()
+  const badge = frame.locator('[data-latency-source="manual"]').first()
+  await badge.waitFor({ timeout: 45000 })
+  assert.match(await badge.getAttribute('title'), /包含新建连接/)
+  const explanation = frame.getByRole('button', { name: '测试耗时说明', exact: true })
+  if (touch) await explanation.tap()
+  else await explanation.click()
+  await frame.getByText('手动测试包含新建连接耗时，并非 Ping；后台自动检测可能复用连接。').waitFor()
+  await page.screenshot({ path: screenshot.replace('.png', '-explanation.png'), fullPage: true })
+  await page.keyboard.press('Escape')
+  const response = await context.request.post(`${base}/cgi-bin/daed-router/graphql`, {
+    headers: { Origin: base },
+    data: { query: '{nodeLatencies{id source alive latencyMs testedAt}}' },
+  })
+  const data = await response.json()
+  assert.ok(!data.errors, JSON.stringify(data.errors))
+  assert.ok(data.data.nodeLatencies.some((result) => result.source === 'manual'))
+  if (touch) {
+    await badge.scrollIntoViewIfNeeded()
+    const bounds = await badge.boundingBox()
+    assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 390, JSON.stringify(bounds))
+  }
+  await page.screenshot({ path: screenshot, fullPage: true })
+}
 ;(async () => {
   const browser = await chromium.launch({
     headless: true,
@@ -105,6 +135,8 @@ async function waitText(locator, pattern) {
     await control('core_fault', { fail: false })
     assert.equal((await gql('{general{dae{modified}}}')).general.dae.modified, true)
     assert.equal((await control('compare')).unchanged, true)
+    await checkManualLatency(page, context, false, path.join(output, 'desktop-manual-latency.png'))
+    assert.equal((await control('compare')).unchanged, true)
     await context.close()
     const mobile = await browser.newContext({
       viewport: { width: 390, height: 844 },
@@ -133,6 +165,7 @@ async function waitText(locator, pattern) {
     await frame.locator('[data-workspace="dashboard"]').waitFor({ timeout: 45000 })
     await frame.getByRole('button', { name: /代理内核 sing-box/ }).tap()
     await waitText(frame.getByRole('dialog'), /当前内核：sing-box/)
+    await checkManualLatency(page, mobile, true, path.join(output, 'mobile-manual-latency.png'))
     assert.equal((await control('compare')).unchanged, true)
     assert.deepEqual(errors, [])
     const result = {
@@ -148,6 +181,8 @@ async function waitText(locator, pattern) {
       mobileTouchSwitch: true,
       mobileRefreshRecovery: true,
       noHorizontalDialogOverflow: true,
+      desktopManualLatencySource: true,
+      mobileManualLatencySource: true,
       apiOnly: true,
     }
     fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify(result, null, 2))

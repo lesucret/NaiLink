@@ -1,9 +1,16 @@
 # NaiLink · 奶油互联
 
 支持 OpenWrt、ImmortalWrt、iStoreOS 的现代 LuCI，提供 x86_64 / ARM64 及试验性 ARMv7 / MIPS32 / MIPSel32 的
-IPK 和 APK v3 安装包。当前测试版：[openwrt-v0.6.36](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.36)。
+IPK 和 APK v3 安装包。当前测试版：[openwrt-v0.6.37](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.37)。
 
 本项目从 0.6.14 起更名为 NaiLink（奶油互联），侧边栏显示 **NaiLink**。0.6.13 及更早版本显示 **Daed**。沿用原有包名、服务、路径和配置，可继续保留数据升级。
+
+## 0.6.37 节点延迟对比修复
+
+- 手动测试不再被后台自动检测覆盖；自动检测单独标注，保留各自的真实结果和时间。
+- sing-box 手动测试与 dae 共用目标解析缓存，遵循配置中的 HTTP 方法，竞速可用的 IPv4 / IPv6 目标，并核对 `generate_` 响应码。
+- 手动值包含新建连接和协议握手，不是 Ping；私有测试进程启动不计入，不扣除连接成本。测试结束取消未完成的另一地址族请求。
+- 不修改节点、订阅、群组、分流和现用内核，不改变后台选路的健康检测。
 
 ## 0.6.36 sing-box 节点测试修复
 

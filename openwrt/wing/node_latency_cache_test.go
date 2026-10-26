@@ -3,10 +3,30 @@ package node
 
 import (
 	"testing"
+	"time"
 
 	"github.com/daeuniverse/dae-wing/db"
 	"github.com/graph-gophers/graphql-go"
 )
+
+func TestRouterManualResultIsNotReplacedByNewerBackgroundCheck(t *testing.T) {
+	ms := int32(180)
+	manual := &LatencyResolver{NodeID: 1, AliveVal: true, LatencyMsV: &ms, TestedAtV: time.Now().Add(-time.Minute)}
+	auto := &LatencyResolver{NodeID: 1, AliveVal: true, TestedAtV: time.Now()}
+	merged := map[uint]*LatencyResolver{1: manual}
+	mergeRuntimeLatencyResults(merged, map[uint]*LatencyResolver{1: auto, 2: {NodeID: 2, TestedAtV: time.Now()}})
+	if merged[1] != manual || *merged[1].LatencyMsV != 180 || merged[1].Source() != "manual" {
+		t.Fatal("manual fresh-connection result was replaced by background measurement")
+	}
+	if merged[2].Source() != "automatic" || auto.SourceV != "" {
+		t.Fatal("result source missing or shared runtime result mutated")
+	}
+	manual.AliveVal, manual.LatencyMsV = false, nil
+	mergeRuntimeLatencyResults(merged, map[uint]*LatencyResolver{1: auto})
+	if merged[1].AliveVal {
+		t.Fatal("background result hid an explicit test failure")
+	}
+}
 
 func TestRouterLatencyCachePrunesDeletedNodesWithoutDiscardingConcurrentWrites(t *testing.T) {
 	nodeLatencyCache.mu.Lock()

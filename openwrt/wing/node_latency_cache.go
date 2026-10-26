@@ -8,6 +8,19 @@ import (
 )
 
 var latencyCacheCore = "dae" // guarded by nodeLatencyCache.mu
+
+func mergeRuntimeLatencyResults(manual, automatic map[uint]*LatencyResolver) {
+	for id, value := range automatic {
+		// Background checks can reuse connections. Never silently replace an
+		// explicit fresh-connection measurement with that different metric.
+		if manual[id] == nil && value != nil {
+			result := cloneLatencyResolver(value)
+			result.SourceV = "automatic"
+			manual[id] = result
+		}
+	}
+}
+
 func syncLatencyCacheCore() {
 	core := dae.RouterCoreName()
 	if core != latencyCacheCore {

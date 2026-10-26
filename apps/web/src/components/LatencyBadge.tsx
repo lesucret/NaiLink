@@ -1,7 +1,7 @@
 import type { NodeLatencyProbeResult } from '~/apis'
 import { useTranslation } from 'react-i18next'
 import { cn } from '~/lib/utils'
-import { formatLatencyLabel, latencyTone } from '~/utils/latency'
+import { formatLatencyDescription, formatLatencyLabel, latencyTone } from '~/utils/latency'
 
 const tones = {
   good: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
@@ -16,13 +16,16 @@ export function LatencyBadge({ result, fallback }: { result?: NodeLatencyProbeRe
   return (
     <span
       data-latency-tone={tone}
-      title={result?.testedAt ? new Date(result.testedAt).toLocaleString() : undefined}
+      data-latency-source={result?.source}
+      title={formatLatencyDescription(result, t)}
+      aria-label={result ? `${formatLatencyLabel(result, t)}. ${formatLatencyDescription(result, t)}` : undefined}
       className={cn(
         'inline-flex max-w-full items-center gap-1 whitespace-nowrap rounded-full px-2 py-1 text-xs font-semibold tabular-nums',
         tones[tone],
       )}
     >
       <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-current" />
+      {result?.source === 'automatic' && <span>{t('latency.automaticShort')}</span>}
       {formatLatencyLabel(result, t) || fallback || t('panel.notTested')}
     </span>
   )

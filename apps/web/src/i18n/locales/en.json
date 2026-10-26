@@ -276,6 +276,11 @@
       "udpUnsupported": "UDP unsupported"
     },
     "unavailable": "Unavailable",
+    "automaticShort": "Auto",
+    "measurementDetails": "About test duration",
+    "measurementHint": "Manual tests include a fresh connection, not ICMP ping. Automatic health checks may reuse connections.",
+    "manualDescription": "Manual HTTP test: includes a fresh connection and protocol handshake. Compare cores using the same target.",
+    "automaticDescription": "Automatic health check: may reuse connections and is not directly comparable to a manual fresh-connection test.",
     "test": "Test",
     "testNode": "Test node latency",
     "testManual": "Test manual nodes",

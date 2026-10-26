@@ -805,6 +805,7 @@ export interface NodeLatencyProbeResult {
   alive: boolean
   testedAt: string
   message?: string | null
+  source?: 'manual' | 'automatic'
 }
 
 export function useTestNodeUDPMutation() {
@@ -839,6 +840,7 @@ export function useTestNodeLatenciesMutation() {
               alive
               testedAt
               message
+              source
             }
           }
         `,

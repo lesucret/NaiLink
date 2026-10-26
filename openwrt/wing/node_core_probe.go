@@ -16,6 +16,14 @@ func testSingBoxNodes(ctx context.Context, nodes []db.Node) ([]*LatencyResolver,
 	if err != nil {
 		return nil, err
 	}
+	// Resolve once outside the measured request, just as dae manual tests do.
+	// Both cores receive the same configured URL, method and available families.
+	option, err := latencyProbeOption(ctx)
+	if err != nil {
+		return nil, err
+	}
+	parsed.Global.TcpCheckUrl = option.TcpCheckOptionRaw.Raw
+	parsed.Global.TcpCheckHttpMethod = option.TcpCheckOptionRaw.Method
 	links := make([]string, len(nodes))
 	for i, n := range nodes {
 		links[i] = n.Link
