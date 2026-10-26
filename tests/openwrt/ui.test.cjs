@@ -242,10 +242,19 @@ test('native log refresh errors preserve previous data and recover on the next s
   assert.match(alert.textContent,/日志读取失败/);
   assert.equal(alert.style.display,'');
   module.setFailure(false);
+  for (const invalid of [{}, null, {logs:42}]) {
+    module.setResult(invalid);
+    await module.polls[0]();
+    assert.equal(elements(tree,'pre')[0].textContent,'last good snapshot');
+    assert.equal(alert.style.display,'');
+  }
   module.setResult({ logs:'recovered snapshot' });
   await module.polls[0]();
   assert.equal(elements(tree,'pre')[0].textContent,'recovered snapshot');
   assert.equal(alert.style.display,'none');
+  module.setResult({logs:''});
+  await module.polls[0]();
+  assert.equal(elements(tree,'pre')[0].textContent,'暂无日志。');
 });
 
 test('community links are reachable from logs and service fallback pages', () => {

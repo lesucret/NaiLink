@@ -13,7 +13,11 @@ async function readRouterLogs() {
   }
   if (host === window || !host.L?.require) throw new Error('请从路由器后台进入运行日志。')
   const rpc = await host.L.require('rpc')
-  return rpc.declare({ object: 'daed-router', method: 'logs', expect: {} })()
+  const result = await rpc.declare({ object: 'daed-router', method: 'logs', expect: {}, reject: true, raise: true })()
+  // Some LuCI versions coerce a nonzero RPC result to an empty object. An empty
+  // log string is valid, but a missing payload must not erase the last snapshot.
+  if (!result || typeof result.logs !== 'string') throw new Error('日志接口暂时不可用。')
+  return result
 }
 
 export function RouterLogs() {

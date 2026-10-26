@@ -7,7 +7,7 @@
 'require view.daed-router.log-format as logFormat'
 'require view.daed-router.community as community'
 
-var logs = rpc.declare({ object: 'daed-router', method: 'logs', expect: {} })
+var logs = rpc.declare({ object: 'daed-router', method: 'logs', expect: {}, reject: true, raise: true })
 
 return view.extend({
   handleSave: null,
@@ -96,8 +96,9 @@ return view.extend({
       if (pending) return pending
       pending = logs()
         .then(function (data) {
+          if (!data || typeof data.logs !== 'string') throw new Error('日志接口暂时不可用。')
           logFormat.theme(container)
-          latest = data.logs || ''
+          latest = data.logs
           failure.style.display = 'none'
           if (following) {
             showLatest()

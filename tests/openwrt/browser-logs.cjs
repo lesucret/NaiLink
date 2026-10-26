@@ -158,12 +158,39 @@ async function exercise(page, root, width, name, calls) {
     throw error
   }
   await bottom(pre)
+  // Real LuCI RPC may reject a nonzero status or coerce a missing payload to {}.
+  // Neither may replace a successful snapshot; the next valid poll must recover.
+  for (const result of [[3], [0, {}]]) {
+    const snapshot = await pre.innerText()
+    let injected = false
+    const failLogs = async (route) => {
+      if (!isLogsRequest(route.request())) return route.continue()
+      const request = route.request().postDataJSON()
+      const ids = (Array.isArray(request) ? request : [request])
+        .filter((item) => item?.params?.[1] === 'daed-router' && item.params?.[2] === 'logs')
+        .map((item) => item.id)
+      const response = await route.fetch()
+      const body = await response.json()
+      const replace = (item) => (ids.includes(item.id) ? { jsonrpc: '2.0', id: item.id, result } : item)
+      injected = true
+      return route.fulfill({ response, json: Array.isArray(body) ? body.map(replace) : replace(body) })
+    }
+    await page.route('**/*', failLogs)
+    try {
+      await root.getByRole('alert').filter({ hasText: /日志读取失败/ }).waitFor({ timeout: 6000 })
+      assert.ok(injected, 'RPC fault was not injected')
+      assert.equal(await pre.innerText(), snapshot, 'failed RPC erased the last log snapshot')
+    } finally {
+      await page.unroute('**/*', failLogs)
+    }
+    await root.getByRole('alert').filter({ hasText: /日志读取失败/ }).waitFor({ state: 'hidden', timeout: 6000 })
+  }
   const button = root.getByRole('button', { name: '暂停跟随', exact: true })
   assert.ok((await button.boundingBox()).height >= 44, 'touch control is too small')
   assert.ok(await pre.evaluate((el) => el.scrollWidth <= el.clientWidth + 1), 'log has horizontal overflow')
   await page.screenshot({ path: path.join(output, `${name}-${width}.png`), fullPage: true })
   console.log(
-    `PASS ${name} ${width}: initial/live tail, rotating-history freeze, pause/resume, keyboard and touch target`,
+    `PASS ${name} ${width}: tail/history, pause/resume, RPC failure/recovery, keyboard and touch target`,
   )
 }
 ;(async () => {
