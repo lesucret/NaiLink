@@ -195,7 +195,7 @@ func latencyProbeNodes(ctx context.Context, ids *[]graphql.ID) ([]db.Node, error
 func testSingleNodeLatency(ctx context.Context, option *dialer.GlobalOption, node *db.Node) *LatencyResolver {
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
-	r := &LatencyResolver{NodeID: node.ID, TestedAtV: time.Now()}
+	r := &LatencyResolver{NodeID: node.ID, TestedAtV: time.Now(), NodeFingerprintV: latencyNodeFingerprint(node)}
 	d, err := dialer.NewFromLinkContext(ctx, option, dialer.InstanceOption{DisableCheck: true}, node.Link, "")
 	if err != nil {
 		message := "invalid_node"

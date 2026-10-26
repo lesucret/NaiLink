@@ -35,13 +35,20 @@ func TestRouterCoreHTTPRacesFixedTargetsAndHonorsMethod(t *testing.T) {
 			}))
 			defer server.Close()
 			cancelled := make(chan struct{}, 1)
+			started := make(chan struct{})
 			dial := routerProbeDialFunc(func(ctx context.Context, _, address string) (net.Conn, error) {
 				switch address {
 				case "192.0.2.1:80":
+					close(started)
 					<-ctx.Done()
 					cancelled <- struct{}{}
 					return nil, ctx.Err()
 				case "[2001:db8::1]:80":
+					select {
+					case <-started:
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
 					return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
 				default:
 					t.Error("fixed test IP was not used", address)
@@ -51,8 +58,16 @@ func TestRouterCoreHTTPRacesFixedTargetsAndHonorsMethod(t *testing.T) {
 			ctx, stop := context.WithTimeout(context.Background(), time.Second)
 			defer stop()
 			result := routerProbeHTTP(ctx, dial, daeConfig.Global{TcpCheckUrl: []string{"http://check.invalid/generate_204", "192.0.2.1", "2001:db8::1"}, TcpCheckHttpMethod: method})
-			if !result.Alive || result.Message != "" || len(cancelled) != 1 {
-				t.Fatal("working second family lost or failed family leaked", result)
+			if !result.Alive || result.Message != "" {
+				t.Fatal("working second family lost", result)
+			}
+			// net/http may finish the cancelled request before its dial goroutine
+			// is scheduled again. Wait for cleanup rather than inspecting a racy
+			// instantaneous channel length.
+			select {
+			case <-cancelled:
+			case <-ctx.Done():
+				t.Fatal("failed family's dial was not cancelled")
 			}
 		})
 	}

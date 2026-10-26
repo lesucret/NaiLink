@@ -13,12 +13,13 @@ import (
 )
 
 type LatencyResolver struct {
-	NodeID     uint
-	LatencyMsV *int32
-	AliveVal   bool
-	TestedAtV  time.Time
-	MessageV   *string
-	SourceV    string
+	NodeID           uint
+	LatencyMsV       *int32
+	AliveVal         bool
+	TestedAtV        time.Time
+	MessageV         *string
+	SourceV          string
+	NodeFingerprintV [32]byte // internal only; never expose node credentials
 }
 
 func (r *LatencyResolver) ID() graphql.ID         { return common.EncodeCursor(r.NodeID) }

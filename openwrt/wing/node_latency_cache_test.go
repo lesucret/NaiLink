@@ -28,6 +28,30 @@ func TestRouterManualResultIsNotReplacedByNewerBackgroundCheck(t *testing.T) {
 	}
 }
 
+func TestRouterManualResultDoesNotSurviveNodeConnectionEdits(t *testing.T) {
+	nodeLatencyCache.mu.Lock()
+	previous := nodeLatencyCache.items
+	nodeLatencyCache.items = make(map[uint]*LatencyResolver)
+	nodeLatencyCache.mu.Unlock()
+	t.Cleanup(func() { nodeLatencyCache.mu.Lock(); nodeLatencyCache.items = previous; nodeLatencyCache.mu.Unlock() })
+	old := db.Node{ID: 1, Link: "socks5://127.0.0.1:1111"}
+	updated := db.Node{ID: 1, Link: "socks5://127.0.0.1:2222"}
+	storeLatencyResults([]*LatencyResolver{{NodeID: 1, NodeFingerprintV: latencyNodeFingerprint(&old)}})
+	if len(latencyCacheForNodes([]db.Node{old}, false, nil)) != 1 {
+		t.Fatal("matching result lost")
+	}
+	if len(latencyCacheForNodes([]db.Node{updated}, false, nil)) != 0 {
+		t.Fatal("edited node inherited its previous server's result")
+	}
+	storeLatencyResults([]*LatencyResolver{{NodeID: 1, NodeFingerprintV: latencyNodeFingerprint(&updated)}})
+	// Simulate an older DB query completing after a new test. It must not delete
+	// that concurrently written measurement, even though it does not return it.
+	latencyCacheForNodes([]db.Node{old}, false, nil)
+	if len(latencyCacheForNodes([]db.Node{updated}, false, nil)) != 1 {
+		t.Fatal("concurrent new result was discarded")
+	}
+}
+
 func TestRouterLatencyCachePrunesDeletedNodesWithoutDiscardingConcurrentWrites(t *testing.T) {
 	nodeLatencyCache.mu.Lock()
 	previous := nodeLatencyCache.items

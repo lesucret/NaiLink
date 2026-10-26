@@ -2,10 +2,15 @@
 package node
 
 import (
+	"crypto/sha256"
 	"github.com/daeuniverse/dae-wing/dae"
 	"github.com/daeuniverse/dae-wing/db"
 	"github.com/graph-gophers/graphql-go"
 )
+
+func latencyNodeFingerprint(node *db.Node) [32]byte {
+	return sha256.Sum256([]byte(node.Link))
+}
 
 var latencyCacheCore = "dae" // guarded by nodeLatencyCache.mu
 
@@ -53,6 +58,12 @@ func latencyCacheForNodes(nodes []db.Node, all bool, before map[uint]*LatencyRes
 	for _, node := range nodes {
 		live[node.ID] = true
 		if cached := nodeLatencyCache.items[node.ID]; cached != nil {
+			if cached.NodeFingerprintV != ([32]byte{}) && cached.NodeFingerprintV != latencyNodeFingerprint(&node) {
+				// A node may retain its ID after an edit or subscription refresh.
+				// Do not show its previous server's measurement. Do not delete here:
+				// a new test can finish after this query's database snapshot.
+				continue
+			}
 			results[node.ID] = cloneLatencyResolver(cached)
 		}
 	}

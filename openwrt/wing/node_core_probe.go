@@ -34,7 +34,7 @@ func testSingBoxNodes(ctx context.Context, nodes []db.Node) ([]*LatencyResolver,
 	}
 	values := make([]*LatencyResolver, len(nodes))
 	for i, result := range results {
-		r := &LatencyResolver{NodeID: nodes[i].ID, AliveVal: result.Alive, TestedAtV: result.Tested}
+		r := &LatencyResolver{NodeID: nodes[i].ID, AliveVal: result.Alive, TestedAtV: result.Tested, NodeFingerprintV: latencyNodeFingerprint(&nodes[i])}
 		if result.Alive {
 			ms := result.Latency
 			r.LatencyMsV = &ms
