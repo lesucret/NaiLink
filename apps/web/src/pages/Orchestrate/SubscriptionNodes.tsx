@@ -58,7 +58,7 @@ const SubscriptionNodeTile = memo(
           <Button
             size="sm"
             variant="ghost"
-            className="subscription-node-test"
+            className="subscription-node-test disabled:opacity-100"
             loading={pending}
             disabled={busy}
             title={t('latency.testNode')}

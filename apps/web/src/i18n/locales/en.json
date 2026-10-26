@@ -262,6 +262,7 @@
     "nodesMeasured": "{{ count }} nodes measured",
     "failed": "Failed",
     "nodeFailure": {
+      "protocol": "Unsupported by this core",
       "parameters": "Unsupported options",
       "ech": "Invalid ECH config",
       "invalidNode": "Invalid options",
@@ -300,6 +301,9 @@
     "retryFailed": "Retry failed ({{count}})",
     "stopping": "Stopping…",
     "failure": {
+      "busy": "Another node test is running. Try again shortly.",
+      "coreChanged": "The core changed. Completed results are retained; retry the remaining nodes.",
+      "expired": "The job expired. Completed results are retained; resume the remaining nodes.",
       "service": "Tests paused after repeated service request failures. Results are kept; continue unfinished nodes when the service is available.",
       "session": "Your session expired. Sign in again to continue testing.",
       "target": "The test target could not be resolved. Check DNS or the test URL, then continue.",

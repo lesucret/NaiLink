@@ -53,6 +53,11 @@ func ProblemText(code string) string {
 }
 
 var problemMessages = map[string]string{
+	"invalid_native_node":                 "sing-box 原生节点 JSON 格式或服务器参数不正确",
+	"unsupported_native_section":          "这里只接受单个出站或 outbounds 出站组合，不接受完整系统配置",
+	"unsupported_native_field":            "原生节点包含当前面板不允许的文件、程序或系统设置字段",
+	"invalid_native_detour":               "出站组合的 detour 引用了外部节点或形成循环",
+	"shadowtls_requires_inner":            "ShadowTLS 需与 Shadowsocks 等内层代理组成 outbounds 组合",
 	"unsupported_dial_mode":               "当前拨号模式尚未适配，仅支持按域名或按 IP 拨号；原设置保留",
 	"unsupported_node_option":             "节点包含尚未支持或重复的参数",
 	"unsupported_header_type":             "当前伪装头类型尚未适配，仅支持无额外伪装头",

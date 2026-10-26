@@ -15,6 +15,8 @@ import {
   ScrollableDialogHeader,
 } from '~/components/ui/scrollable-dialog'
 import { useSetValue } from '~/hooks/useSetValue'
+import { routerMode } from '~/utils/router-mode'
+import { NodeProtocolGuide } from './NodeProtocolGuide'
 
 const schema = z.object({
   resources: z
@@ -38,11 +40,13 @@ export function ImportResourceFormModal({
   opened,
   onClose,
   handleSubmit: onSubmitProp,
+  resourceKind,
 }: {
   title: string
   opened: boolean
   onClose: () => void
   handleSubmit: (values: FormValues) => Promise<void>
+  resourceKind?: 'node'
 }) {
   const { t } = useTranslation()
   const [submitFailed, setSubmitFailed] = useState(false)
@@ -106,6 +110,7 @@ export function ImportResourceFormModal({
           <DialogTitle>{title}</DialogTitle>
         </ScrollableDialogHeader>
         <ScrollableDialogBody>
+          {resourceKind === 'node' && routerMode && <NodeProtocolGuide opened={opened} />}
           <form onSubmit={handleSubmit(onSubmit)}>
             {submitFailed && (
               <p role="alert" className="mb-3 text-sm text-destructive">

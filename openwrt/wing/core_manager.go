@@ -154,6 +154,9 @@ func (m *routerCoreManager) plan(ctx context.Context, target string) routercore.
 	result.Installed = target == "dae" || routerSingBoxInstalled()
 	result.Revision = routercore.Fingerprint([]any{current, target, conf, routerCurrentGeodataIdentity(m.dirs), result.Installed, routercore.SingBoxVersion, routercore.AdapterRevision})
 	var profile sbObject
+	if target == "dae" {
+		result.Problems = append(result.Problems, routerDaeNodeProblems(conf)...)
+	}
 	if target == "sing-box" {
 		var warnings []string
 		var err error
@@ -416,6 +419,9 @@ func Run(log *logrus.Logger, conf *daeConfig.Config, dirs []string, disableTimes
 	}
 	m.factory = func(ctx context.Context, name string, c *daeConfig.Config) (routerCoreSession, error) {
 		if name == "dae" {
+			if problems := routerDaeNodeProblems(c); len(problems) > 0 {
+				return nil, errors.New(strings.Join(problems, "；"))
+			}
 			return newRouterDaeSession(log, c, dirs, disableTimestamp, dry), nil
 		}
 		return newRouterSingBoxSession(ctx, log, c, dirs, !dry)
@@ -601,6 +607,11 @@ func (s *routerDaeSession) Ready(ctx context.Context) error {
 	}
 }
 func (s *routerDaeSession) Reload(msg *ReloadMessage) error {
+	if msg.Config != nil {
+		if problems := routerDaeNodeProblems(msg.Config); len(problems) > 0 {
+			return errors.New(strings.Join(problems, "；"))
+		}
+	}
 	cb := make(chan error, 1)
 	copy := *msg
 	copy.Callback = cb

@@ -24,7 +24,21 @@ TRANSACTION_DEFER = '''defer func() {
 	}()'''
 
 
+def router_node_model(text):
+    text = text.replace('if strings.HasPrefix(strings.TrimSpace(link), "singbox://") || strings.HasPrefix(strings.TrimSpace(link), "{")', 'if routercore.IsNativeURI(link) || strings.HasPrefix(strings.TrimSpace(link), "{")')
+    if 'routerNativeNode(link, tag, subscriptionId)' not in text:
+        text = text.replace('if !strings.Contains(link, "://") {', 'if routercore.IsNativeURI(link) || strings.HasPrefix(strings.TrimSpace(link), "{") { return routerNativeNode(link, tag, subscriptionId) }\n\tif !strings.Contains(link, "://") {', 1)
+    if '"github.com/daeuniverse/dae-wing/routercore"' not in text:
+        text = text.replace('import (', 'import (\n\t"github.com/daeuniverse/dae-wing/routercore"', 1)
+    text = text.replace("dialer.InstanceOption{DisableCheck: false}", "dialer.InstanceOption{DisableCheck: true}")
+    if "defer d.Close()" not in text:
+        text = text.replace("property := d.Property()", "defer d.Close()\n\tproperty := d.Property()", 1)
+    return text
+
+
 def router_transactions(text):
+    if "func importNode(" in text:
+        text = text.replace('Where("link = ?", arg.Link)', 'Where("link = ?", m.Link)')
     text = re.sub(r'(func Update\([^\n]+\)) \(\*Resolver, error\)', r'\1 (result *Resolver, err error)', text)
     text = text.replace(') (int32, error) {', ') (n int32, err error) {')
     return text.replace(TRANSACTION_DEFER, 'defer db.FinishTransaction(tx, &err)')
@@ -353,6 +367,7 @@ func _fetchLinksContext(ctx context.Context, subscriptionLink string, transport 
         "graphql/service/node/latency_mutation_utils.go": ("b7e722f4c24dd9606fceaf310daf285b30b8d878413ca20702970ef3b4ca805d", lambda value: (HERE / "wing/node_latency.go").read_text(encoding="utf-8")),
         "graphql/service/node/latency_resolver.go": ("afdc8eb89632429bfa0ee7106af06ee2176993ca889adb125c816bcf9b57a64b", lambda value: (HERE / "wing/node_latency_resolver.go").read_text(encoding="utf-8")),
         "graphql/service/node/schema.go": ("00484e6a38c9de8dd7cd1b2c4ab179b0ec70cba4dbae54276bbfa2913308d56f", lambda value: value.replace('message: String\n}', 'message: String\n\tsource: String!\n}')),
+        "db/node_utils.go": ("39135decd67366098a5d99b46389fbbbfd47406a0fe39fffec2f71fedbccf2b2", router_node_model),
         "graphql/service/node/latency_cache.go": ("4d4fd03249c617bcc9fccb508dbc2d567fa74557dd5900ee046cbf307ff64831", lambda value: value.replace('if err := refreshLatencyCacheIfNeeded(ctx); err != nil {\n\t\treturn nil, err\n\t}', '// Reading results must never start network probes.')),
         "graphql/mutation.go": ("90a8f23ac625f2d3adf79f7f236d40b6529e2857028cc5ed02f02c0e111ee8ef", lambda value: value.replace('TestNodeLatencies(args *struct', 'TestNodeLatencies(ctx context.Context, args *struct').replace('node.TestLatencies(context.TODO(), args.IDs)', 'node.TestLatencies(ctx, args.IDs)')),
         "graphql/root_schema.go": ("e9cf4836080bf087a0ddba58ed9596abc6e020e437c828d5f718932906b3bef0", lambda value: value.replace('type Mutation {', '''type NodeUdpTest {
@@ -377,7 +392,7 @@ type Mutation {
         elif relative in ("graphql/service/node/latency_mutation_utils.go", "graphql/service/node/latency_resolver.go", "dae/runtime.go", "dae/httpclient.go", "dae-core/component/interface_manager.go"):
             replacement = {"latency_mutation_utils.go": "node_latency.go", "latency_resolver.go": "node_latency_resolver.go"}.get(relative.split("/")[-1], relative.split("/")[-1])
             data = (HERE / "wing" / replacement).read_bytes()
-        elif relative in ("cmd/run.go", "dae/run.go") or transform in (router_transactions, router_control_dial, router_dns_recovery, router_dns_transport, router_bootstrap, router_udp_pool_test):
+        elif relative in ("cmd/run.go", "dae/run.go") or transform in (router_node_model, router_transactions, router_control_dial, router_dns_recovery, router_dns_transport, router_bootstrap, router_udp_pool_test):
             data = transform(data.decode()).encode()
         destination.write_bytes(data)
         generated[relative] = digest(data)
@@ -410,6 +425,11 @@ type Mutation {
     if 'activateGeodata(target:' not in schema_text:
         schema_text = schema_text.replace('type Mutation {', 'type Mutation {\n    activateGeodata(target: String!, previous: String!): Int! @hasRole(role: ADMIN)', 1)
     schema_text = schema_text.replace('switchCore(target: String!, revision: String!):', 'switchCore(target: String!, revision: String!, operation: String):')
+    if 'coreCapabilities:' not in schema_text:
+        schema_text = schema_text.replace('type Query {', 'type Query {\n    coreCapabilities: String! @hasRole(role: ADMIN)', 1)
+    if 'startLatencyTest(' not in schema_text:
+        schema_text = schema_text.replace('type Mutation {', 'type Mutation {\n    startLatencyTest(ids: [ID!]!, operation: String!): String! @hasRole(role: ADMIN)\n    stopLatencyTest(id: String!): Int! @hasRole(role: ADMIN)', 1)
+        schema_text = schema_text.replace('type Query {', 'type Query {\n    latencyTest(id: String!, after: Int): String! @hasRole(role: ADMIN)', 1)
     schema_file.write_text(schema_text, encoding="utf-8", newline="\n")
     generated["graphql/root_schema.go"] = digest(schema_text.encode())
     mutation_file.write_text(mutation_text, encoding="utf-8", newline="\n")
@@ -425,12 +445,15 @@ type Mutation {
         ("webrender/router_assets.go", "web_assets.go"),
         ("webrender/router_assets_test.go", "web_assets_test.go"),
         ("db/router_transaction.go", "transaction.go"),
+        ("db/router_native_node.go", "node_native_import.go"),
+        ("db/router_native_node_test.go", "node_native_import_test.go"),
         ("graphql/router_transactions_test.go", "transaction_test.go"),
         ("cmd/router_http_context_test.go", "http_context_test.go"),
         ("dae/router_network_ready.go", "network_ready.go"),
         ("dae/router_geodata_update.go", "geodata_update.go"),
         ("dae/router_geodata_update_test.go", "geodata_update_test.go"),
         ("dae/router_core_manager.go", "core_manager.go"),
+        ("dae/router_core_capabilities.go", "core_capabilities.go"),
         ("dae-core/control/router_core_listener.go", "core_listener.go"),
         ("dae-core/control/router_core_listener_test.go", "core_listener_test.go"),
         ("dae/router_singbox_config.go", "singbox_config.go"),
@@ -442,6 +465,9 @@ type Mutation {
         ("dae/router_core_probe.go", "core_probe.go"),
         ("dae/router_core_probe_test.go", "core_probe_test.go"),
         ("graphql/service/node/router_core_probe.go", "node_core_probe.go"),
+        ("graphql/service/node/router_test_jobs.go", "node_test_jobs.go"),
+        ("graphql/service/node/router_test_jobs_test.go", "node_test_jobs_test.go"),
+        ("graphql/router_test_jobs.go", "test_job_mutations.go"),
         ("dae/router_core_manager_test.go", "core_manager_test.go"),
         ("graphql/router_core_mutations.go", "core_mutations.go"),
         ("graphql/router_geodata_mutation.go", "geodata_mutation.go"),
@@ -543,6 +569,7 @@ def prepare(root):
         "graphql/service/group/mutation_utils.go", "graphql/service/node/mutation_utils.go",
         "graphql/service/node/latency_mutation_utils.go", "graphql/service/node/latency_cache.go",
         "graphql/service/node/latency_resolver.go", "graphql/service/node/schema.go",
+        "db/node_utils.go",
         "graphql/service/subscription/mutation_utils.go",
         "dae-core/component/outbound/dialer/dialer.go", "dae-core/component/outbound/dialer/register.go",
         "dae-core/component/interface_manager.go",

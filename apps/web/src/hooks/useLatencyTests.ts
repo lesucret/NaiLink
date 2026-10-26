@@ -1,7 +1,13 @@
+import type { NodeLatencyProbeResult } from '~/apis'
+import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useTestNodeLatenciesMutation } from '~/apis'
+import { QUERY_KEY_NODE_LATENCY } from '~/constants'
+import { useGQLQueryClient } from '~/contexts'
 import { latencyRequestFailure, testLatencyBatches } from '~/utils/latency-batch'
+import { testRouterLatencyJob } from '~/utils/latency-job'
+import { routerMode } from '~/utils/router-mode'
 
 interface TestRun {
   ids: string[]
@@ -13,6 +19,8 @@ interface TestRun {
 export function useLatencyTests() {
   const { t } = useTranslation()
   const { mutateAsync } = useTestNodeLatenciesMutation()
+  const client = useGQLQueryClient()
+  const cache = useQueryClient()
   const busyRef = useRef(false)
   const stopped = useRef(false)
   const mounted = useRef(true)
@@ -46,31 +54,41 @@ export function useLatencyTests() {
       setProgress({ completed: current.completed.size, total: current.ids.length })
       setRemaining(ids.length)
       setFailed(current.failed.size)
+      const update = (results: NodeLatencyProbeResult[]) => {
+        for (const result of results) {
+          current.completed.add(result.id)
+          if (result.alive) current.failed.delete(result.id)
+          else current.failed.add(result.id)
+        }
+        if (mounted.current) {
+          setProgress({ completed: current.completed.size, total: current.ids.length })
+          setRemaining(current.ids.length - current.completed.size)
+          setFailed(current.failed.size)
+          cache.setQueryData<NodeLatencyProbeResult[]>(QUERY_KEY_NODE_LATENCY, (previous = []) => {
+            const merged = new Map(previous.map((r) => [r.id, r]))
+            for (const r of results) merged.set(r.id, r)
+            return [...merged.values()]
+          })
+        }
+      }
       try {
-        await testLatencyBatches(
-          ids,
-          async (batch) => {
-            if (mounted.current) setPending((previous) => new Set([...previous, ...batch]))
-            try {
-              return await mutateAsync(batch)
-            } finally {
-              if (mounted.current) setPending((previous) => new Set([...previous].filter((id) => !batch.includes(id))))
-            }
-          },
-          (results) => {
-            for (const result of results) {
-              current.completed.add(result.id)
-              if (result.alive) current.failed.delete(result.id)
-              else current.failed.add(result.id)
-            }
-            if (mounted.current) {
-              setProgress({ completed: current.completed.size, total: current.ids.length })
-              setRemaining(current.ids.length - current.completed.size)
-              setFailed(current.failed.size)
-            }
-          },
-          () => stopped.current,
-        )
+        if (routerMode) {
+          await testRouterLatencyJob(client, ids, update, () => stopped.current)
+        } else
+          await testLatencyBatches(
+            ids,
+            async (batch) => {
+              if (mounted.current) setPending((previous) => new Set([...previous, ...batch]))
+              try {
+                return await mutateAsync(batch)
+              } finally {
+                if (mounted.current)
+                  setPending((previous) => new Set([...previous].filter((id) => !batch.includes(id))))
+              }
+            },
+            update,
+            () => stopped.current,
+          )
       } catch (error) {
         if (mounted.current) setError(t(`latency.failure.${latencyRequestFailure(error)}`))
       } finally {
@@ -82,7 +100,7 @@ export function useLatencyTests() {
         }
       }
     },
-    [mutateAsync, t],
+    [mutateAsync, t, client, cache],
   )
   const test = useCallback(
     (ids: string[], origin = 'global') =>

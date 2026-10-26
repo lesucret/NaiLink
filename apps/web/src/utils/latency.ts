@@ -38,6 +38,7 @@ export function formatLatencyLabel(result: NodeLatencyProbeResult | undefined, t
     return undefined
   }
   if (result.alive === false) {
+    if (result.message === 'unsupported_protocol') return t('latency.nodeFailure.protocol')
     if (result.message === 'invalid_ech_public_name') return t('latency.nodeFailure.ech')
     // Native adapter failures happen before a network request. Keep them
     // distinct from line timeouts without echoing arbitrary backend text.

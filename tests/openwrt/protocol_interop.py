@@ -100,6 +100,36 @@ def run_fixture(args, http_port, udp_port):
         pair = subprocess.check_output([str(args.sing_box), 'generate', 'reality-keypair'], text=True)
         reality_keys = dict(line.split(': ', 1) for line in pair.strip().splitlines())
         inbounds, cases, native_cases = [], [], []
+        def native_case(name, value, family, tcp_only=False):
+            encoded = base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip('=')
+            native_cases.append({'Name': name, 'Link': 'singbox://' + encoded, 'Family': family, 'TCPOnly': tcp_only})
+        h1 = port(True)
+        inbounds.append({'type': 'hysteria', 'tag': 'hysteria1', 'listen': '127.0.0.1', 'listen_port': h1,
+                         'up_mbps': 20, 'down_mbps': 100, 'users': [{'auth_str': 'fixture'}], 'tls': vless_tls})
+        native_cases.append({'Name': 'hysteria1-uri', 'Link': f'hysteria://fixture@127.0.0.1:{h1}?peer=vless.fixture.test&upmbps=20&downmbps=100'})
+        snell = port()
+        inbounds.append({'type': 'snell', 'tag': 'snell6', 'version': 6, 'listen': '127.0.0.1', 'listen_port': snell, 'psk': 'fixture-snell-password'})
+        native_cases.append({'Name': 'snell6-uri', 'Link': f'snell://fixture-snell-password@127.0.0.1:{snell}?version=6'})
+        inner, outer = port(), port()
+        inbounds.extend([
+            {'type': 'shadowsocks', 'tag': 'shadow-inner', 'listen': '127.0.0.1', 'listen_port': inner, 'method': 'aes-128-gcm', 'password': 'fixture'},
+            {'type': 'shadowtls', 'tag': 'shadow-outer', 'listen': '127.0.0.1', 'listen_port': outer, 'version': 3,
+             'users': [{'password': 'fixture'}], 'handshake': {'server': '127.0.0.1', 'server_port': cover.server_port}, 'detour': 'shadow-inner'},
+        ])
+        native_case('shadowtls3-bundle', {'tag': 'inner', 'outbounds': [
+            {'type': 'shadowsocks', 'tag': 'inner', 'server': '127.0.0.1', 'server_port': inner, 'method': 'aes-128-gcm', 'password': 'fixture', 'detour': 'outer'},
+            {'type': 'shadowtls', 'tag': 'outer', 'server': '127.0.0.1', 'server_port': outer, 'version': 3, 'password': 'fixture', 'tls': {'enabled': True, 'server_name': 'vless.fixture.test'}},
+        ]}, 'shadowtls', True)
+        ssh_port = port()
+        subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(work / 'ssh-key')], check=True)
+        ssh_source = Path(__file__).with_name('ssh_fixture.go')
+        subprocess.run(['go', 'build', '-o', str(work / 'ssh-fixture'), str(ssh_source)], cwd=args.wing, check=True)
+        ssh_process = subprocess.Popen([str(work / 'ssh-fixture'), str(work / 'ssh-key'), str(ssh_port), str(http_port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cleanup.callback(ssh_process.wait, 5)
+        cleanup.callback(ssh_process.terminate)
+        host_key = ' '.join((work / 'ssh-key.pub').read_text().split()[:2])
+        native_cases.append({'Name': 'ssh-uri-host-key', 'Link': f'ssh://fixture:fixture@127.0.0.1:{ssh_port}?host_key=' + urllib.parse.quote(host_key, safe=''), 'TCPOnly': True})
+        native_case('ssh-native-json', {'type': 'ssh', 'server': '127.0.0.1', 'server_port': ssh_port, 'user': 'fixture', 'password': 'fixture', 'host_key': [host_key]}, 'ssh-json', True)
         reality_port = port()
         reality_uuid = '00000000-0000-4000-8000-000000000002'
         inbounds.append({'type': 'vless', 'tag': 'reality-vision', 'listen': '127.0.0.1', 'listen_port': reality_port,
@@ -233,7 +263,7 @@ def run_fixture(args, http_port, udp_port):
                 env["SSL_CERT_FILE"] = str(work / "vless-cert.pem")
                 if args.client_singbox:
                     env['DAED_TEST_SINGBOX'] = str(args.client_singbox.resolve(strict=True))
-                return subprocess.run(["go", "test", "-count=1", "-timeout=120s", "-v", "./graphql/service/node", "./dae", "github.com/daeuniverse/dae/control", "-run", "TestRouterProtocolInteroperability$|TestRouterCoreProtocolInteroperability$|TestRouterHTTPProtocolDownload$|TestRouterConnectionProtocolFailover$"], cwd=args.wing, env=env).returncode
+                return subprocess.run(["go", "test", "-count=1", "-timeout=180s", "-v", "./graphql/service/node", "./dae", "github.com/daeuniverse/dae/control", "-run", "TestRouterProtocolInteroperability$|TestRouterCoreProtocolInteroperability$|TestRouterCoreBulkProbe$|TestRouterHTTPProtocolDownload$|TestRouterConnectionProtocolFailover$"], cwd=args.wing, env=env).returncode
             finally:
                 process.terminate()
                 process.wait(timeout=5)

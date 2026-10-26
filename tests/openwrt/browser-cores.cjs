@@ -58,6 +58,21 @@ async function checkManualLatency(page, context, touch, screenshot) {
     assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 390, JSON.stringify(bounds))
   }
   await page.screenshot({ path: screenshot, fullPage: true })
+  await frame.getByRole('button', { name: '导入节点', exact: true }).click()
+  const guide = frame.locator('[data-protocol-guide]')
+  await waitText(guide, /当前内核：(dae|sing-box)/)
+  await guide.getByRole('button', { name: 'VLESS / REALITY', exact: true }).click()
+  await guide.getByRole('status').waitFor()
+  if (/sing-box/.test(await guide.textContent())) {
+    await guide.getByRole('button', { name: 'SSH', exact: true }).click()
+    await waitText(guide, /内联密钥/)
+    await guide.locator('summary').click()
+    await waitText(guide, /Cronet/)
+  }
+  const guideBox = await guide.boundingBox()
+  if (touch) assert.ok(guideBox.x >= 0 && guideBox.x + guideBox.width <= 391, JSON.stringify(guideBox))
+  await page.screenshot({ path: screenshot.replace('.png', '-protocol-guide.png'), fullPage: true })
+  await page.keyboard.press('Escape')
 }
 ;(async () => {
   const browser = await chromium.launch({
@@ -101,6 +116,13 @@ async function checkManualLatency(page, context, touch, screenshot) {
     await gql(
       `mutation{selectConfig(id:${JSON.stringify(config)}) selectDns(id:${JSON.stringify(dns)}) selectRouting(id:${JSON.stringify(route)}) run(dry:false)}`,
     )
+    const nativeJSON = JSON.stringify({type:'ssh',tag:'Native fixture',server:'fixture.invalid',server_port:22,user:'fixture',password:'fixture'})
+    const native = (await gql(`mutation{importNodes(rollbackError:true,args:[{link:${JSON.stringify(nativeJSON)}}]){error node{id link protocol name}}}`)).importNodes[0]
+    assert.equal(native.error, null)
+    assert.equal(native.node.protocol, 'ssh')
+    assert.match(native.node.link, /^singbox:\/\//)
+    await gql(`mutation{updateNode(id:${JSON.stringify(native.node.id)},newLink:${JSON.stringify(nativeJSON)}){id}}`)
+    await gql(`mutation{removeNodes(ids:[${JSON.stringify(native.node.id)}])}`)
     await gql(
       'mutation{importNodes(rollbackError:true,args:[{tag:"Preserved node",link:"socks5://127.0.0.1:19092#preserved"}]){error node{id}}}',
     )
@@ -183,6 +205,8 @@ async function checkManualLatency(page, context, touch, screenshot) {
       noHorizontalDialogOverflow: true,
       desktopManualLatencySource: true,
       mobileManualLatencySource: true,
+      nativeJSONImportUpdate: true,
+      desktopMobileProtocolGuide: true,
       apiOnly: true,
     }
     fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify(result, null, 2))

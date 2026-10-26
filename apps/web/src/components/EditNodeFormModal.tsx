@@ -11,6 +11,7 @@ import type { V2rayFormValues } from './ConfigureNodeFormModal/V2rayForm.tsx'
 import { parseNodeUrl } from '@daeuniverse/dae-node-parser'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { nativeNodeJSON } from '~/utils/native-node'
 import { preserveNodeLink } from '~/utils/node-link-edit'
 import { useTagNodeMutation, useUpdateNodeMutation } from '../apis/index.ts'
 import { AnyTLSForm } from './ConfigureNodeFormModal/AnyTLSForm.tsx'
@@ -24,6 +25,7 @@ import { SSRForm } from './ConfigureNodeFormModal/SSRForm.tsx'
 import { TrojanForm } from './ConfigureNodeFormModal/TrojanForm.tsx'
 import { TuicForm } from './ConfigureNodeFormModal/TuicForm.tsx'
 import { V2rayForm } from './ConfigureNodeFormModal/V2rayForm.tsx'
+import { Button } from './ui/button.tsx'
 import { Dialog, DialogTitle } from './ui/dialog.tsx'
 import { Input } from './ui/input.tsx'
 import {
@@ -33,6 +35,7 @@ import {
   ScrollableDialogHeader,
 } from './ui/scrollable-dialog.tsx'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs.tsx'
+import { Textarea } from './ui/textarea.tsx'
 
 type NodeType =
   | 'v2ray'
@@ -83,6 +86,8 @@ export function EditNodeFormModal({ opened, onClose, node }: EditNodeFormModalPr
   const [actionsPortal, setActionsPortal] = useState<HTMLDivElement | null>(null)
   const [currentTag, setCurrentTag] = useState('')
   const [submitFailed, setSubmitFailed] = useState(false)
+  const [nativeJSON, setNativeJSON] = useState('')
+  const nativeInitial = useMemo(() => nativeNodeJSON(node?.link || ''), [node?.link])
   const saving = updateNodeMutation.isPending || tagNodeMutation.isPending
 
   // Parse the node link to detect protocol and get initial values
@@ -101,8 +106,9 @@ export function EditNodeFormModal({ opened, onClose, node }: EditNodeFormModalPr
       setCurrentTag(node?.tag || '')
       setManualTab(null)
       setSubmitFailed(false)
+      setNativeJSON(nativeInitial || '')
     }
-  }, [opened, node?.id, node?.tag])
+  }, [opened, node?.id, node?.tag, nativeInitial])
 
   // Use manual selection if user switched tabs, otherwise use detected type
   const activeTab = manualTab ?? (nodeType !== 'unknown' ? nodeType : 'v2ray')
@@ -182,100 +188,118 @@ export function EditNodeFormModal({ opened, onClose, node }: EditNodeFormModalPr
               placeholder={node.name}
             />
 
-            <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full min-w-0">
-              <div className="overflow-x-auto -mx-1 px-1">
-                <TabsList className="inline-flex w-max gap-1">
-                  <TabsTrigger value="v2ray">V2RAY</TabsTrigger>
-                  <TabsTrigger value="ss">SS</TabsTrigger>
-                  <TabsTrigger value="ssr">SSR</TabsTrigger>
-                  <TabsTrigger value="trojan">Trojan</TabsTrigger>
-                  <TabsTrigger value="juicity">Juicity</TabsTrigger>
-                  <TabsTrigger value="hysteria2">Hysteria2</TabsTrigger>
-                  <TabsTrigger value="anytls">AnyTLS</TabsTrigger>
-                  <TabsTrigger value="tuic">Tuic</TabsTrigger>
-                  <TabsTrigger value="http">HTTP</TabsTrigger>
-                  <TabsTrigger value="socks5">SOCKS5</TabsTrigger>
-                </TabsList>
+            {nativeInitial !== undefined ? (
+              <div className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  sing-box 原生节点：保留完整出站参数。仅支持单个出站或封闭的出站组合，不支持完整系统配置。
+                </p>
+                <Textarea
+                  aria-label="sing-box 出站 JSON"
+                  className="min-h-64 font-mono text-xs"
+                  value={nativeJSON}
+                  disabled={saving}
+                  onChange={(event) => setNativeJSON(event.target.value)}
+                />
+                <Button disabled={saving || !nativeJSON.trim()} onClick={() => void onLinkGeneration(nativeJSON)}>
+                  {t('actions.submit')}
+                </Button>
               </div>
+            ) : (
+              <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full min-w-0">
+                <div className="overflow-x-auto -mx-1 px-1">
+                  <TabsList className="inline-flex w-max gap-1">
+                    <TabsTrigger value="v2ray">V2RAY</TabsTrigger>
+                    <TabsTrigger value="ss">SS</TabsTrigger>
+                    <TabsTrigger value="ssr">SSR</TabsTrigger>
+                    <TabsTrigger value="trojan">Trojan</TabsTrigger>
+                    <TabsTrigger value="juicity">Juicity</TabsTrigger>
+                    <TabsTrigger value="hysteria2">Hysteria2</TabsTrigger>
+                    <TabsTrigger value="anytls">AnyTLS</TabsTrigger>
+                    <TabsTrigger value="tuic">Tuic</TabsTrigger>
+                    <TabsTrigger value="http">HTTP</TabsTrigger>
+                    <TabsTrigger value="socks5">SOCKS5</TabsTrigger>
+                  </TabsList>
+                </div>
 
-              <TabsContent value="v2ray" className="space-y-2 pt-2">
-                <V2rayForm
-                  onLinkGeneration={onLinkGeneration}
-                  initialValues={nodeType === 'v2ray' ? (initialValues as V2rayFormValues) : undefined}
-                  actionsPortal={actionsPortal}
-                />
-              </TabsContent>
+                <TabsContent value="v2ray" className="space-y-2 pt-2">
+                  <V2rayForm
+                    onLinkGeneration={onLinkGeneration}
+                    initialValues={nodeType === 'v2ray' ? (initialValues as V2rayFormValues) : undefined}
+                    actionsPortal={actionsPortal}
+                  />
+                </TabsContent>
 
-              <TabsContent value="ss" className="space-y-2 pt-2">
-                <SSForm
-                  onLinkGeneration={onLinkGeneration}
-                  initialValues={nodeType === 'ss' ? (initialValues as SSFormValues) : undefined}
-                  actionsPortal={actionsPortal}
-                />
-              </TabsContent>
+                <TabsContent value="ss" className="space-y-2 pt-2">
+                  <SSForm
+                    onLinkGeneration={onLinkGeneration}
+                    initialValues={nodeType === 'ss' ? (initialValues as SSFormValues) : undefined}
+                    actionsPortal={actionsPortal}
+                  />
+                </TabsContent>
 
-              <TabsContent value="ssr" className="space-y-2 pt-2">
-                <SSRForm
-                  onLinkGeneration={onLinkGeneration}
-                  initialValues={nodeType === 'ssr' ? (initialValues as SSRFormValues) : undefined}
-                  actionsPortal={actionsPortal}
-                />
-              </TabsContent>
+                <TabsContent value="ssr" className="space-y-2 pt-2">
+                  <SSRForm
+                    onLinkGeneration={onLinkGeneration}
+                    initialValues={nodeType === 'ssr' ? (initialValues as SSRFormValues) : undefined}
+                    actionsPortal={actionsPortal}
+                  />
+                </TabsContent>
 
-              <TabsContent value="trojan" className="space-y-2 pt-2">
-                <TrojanForm
-                  onLinkGeneration={onLinkGeneration}
-                  initialValues={nodeType === 'trojan' ? (initialValues as TrojanFormValues) : undefined}
-                  actionsPortal={actionsPortal}
-                />
-              </TabsContent>
+                <TabsContent value="trojan" className="space-y-2 pt-2">
+                  <TrojanForm
+                    onLinkGeneration={onLinkGeneration}
+                    initialValues={nodeType === 'trojan' ? (initialValues as TrojanFormValues) : undefined}
+                    actionsPortal={actionsPortal}
+                  />
+                </TabsContent>
 
-              <TabsContent value="juicity" className="space-y-2 pt-2">
-                <JuicityForm
-                  onLinkGeneration={onLinkGeneration}
-                  initialValues={nodeType === 'juicity' ? (initialValues as JuicityFormValues) : undefined}
-                  actionsPortal={actionsPortal}
-                />
-              </TabsContent>
+                <TabsContent value="juicity" className="space-y-2 pt-2">
+                  <JuicityForm
+                    onLinkGeneration={onLinkGeneration}
+                    initialValues={nodeType === 'juicity' ? (initialValues as JuicityFormValues) : undefined}
+                    actionsPortal={actionsPortal}
+                  />
+                </TabsContent>
 
-              <TabsContent value="hysteria2" className="space-y-2 pt-2">
-                <Hysteria2Form
-                  actionsPortal={actionsPortal}
-                  initialValues={nodeType === 'hysteria2' ? (initialValues as Hysteria2FormValues) : undefined}
-                  onLinkGeneration={onLinkGeneration}
-                />
-              </TabsContent>
-              <TabsContent value="anytls" className="space-y-2 pt-2">
-                <AnyTLSForm
-                  actionsPortal={actionsPortal}
-                  initialValues={nodeType === 'anytls' ? (initialValues as AnytlsFormValues) : undefined}
-                  onLinkGeneration={onLinkGeneration}
-                />
-              </TabsContent>
-              <TabsContent value="tuic" className="space-y-2 pt-2">
-                <TuicForm
-                  onLinkGeneration={onLinkGeneration}
-                  initialValues={nodeType === 'tuic' ? (initialValues as TuicFormValues) : undefined}
-                  actionsPortal={actionsPortal}
-                />
-              </TabsContent>
+                <TabsContent value="hysteria2" className="space-y-2 pt-2">
+                  <Hysteria2Form
+                    actionsPortal={actionsPortal}
+                    initialValues={nodeType === 'hysteria2' ? (initialValues as Hysteria2FormValues) : undefined}
+                    onLinkGeneration={onLinkGeneration}
+                  />
+                </TabsContent>
+                <TabsContent value="anytls" className="space-y-2 pt-2">
+                  <AnyTLSForm
+                    actionsPortal={actionsPortal}
+                    initialValues={nodeType === 'anytls' ? (initialValues as AnytlsFormValues) : undefined}
+                    onLinkGeneration={onLinkGeneration}
+                  />
+                </TabsContent>
+                <TabsContent value="tuic" className="space-y-2 pt-2">
+                  <TuicForm
+                    onLinkGeneration={onLinkGeneration}
+                    initialValues={nodeType === 'tuic' ? (initialValues as TuicFormValues) : undefined}
+                    actionsPortal={actionsPortal}
+                  />
+                </TabsContent>
 
-              <TabsContent value="http" className="space-y-2 pt-2">
-                <HTTPForm
-                  onLinkGeneration={onLinkGeneration}
-                  initialValues={nodeType === 'http' ? (initialValues as HTTPFormValues) : undefined}
-                  actionsPortal={actionsPortal}
-                />
-              </TabsContent>
+                <TabsContent value="http" className="space-y-2 pt-2">
+                  <HTTPForm
+                    onLinkGeneration={onLinkGeneration}
+                    initialValues={nodeType === 'http' ? (initialValues as HTTPFormValues) : undefined}
+                    actionsPortal={actionsPortal}
+                  />
+                </TabsContent>
 
-              <TabsContent value="socks5" className="space-y-2 pt-2">
-                <Socks5Form
-                  onLinkGeneration={onLinkGeneration}
-                  initialValues={nodeType === 'socks5' ? (initialValues as Socks5FormValues) : undefined}
-                  actionsPortal={actionsPortal}
-                />
-              </TabsContent>
-            </Tabs>
+                <TabsContent value="socks5" className="space-y-2 pt-2">
+                  <Socks5Form
+                    onLinkGeneration={onLinkGeneration}
+                    initialValues={nodeType === 'socks5' ? (initialValues as Socks5FormValues) : undefined}
+                    actionsPortal={actionsPortal}
+                  />
+                </TabsContent>
+              </Tabs>
+            )}
           </ScrollableDialogBody>
           <ScrollableDialogFooter>
             <div ref={setActionsPortal} className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end w-full" />

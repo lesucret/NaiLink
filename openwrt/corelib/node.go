@@ -30,6 +30,31 @@ func decode64(s string) ([]byte, error) {
 	return nil, errors.New("invalid_node")
 }
 func Node(link, tag string, opt NodeOptions) (Object, error) {
+	if IsNativeURI(link) && !strings.HasPrefix(strings.TrimSpace(link), "singbox://") {
+		encoded, err := EncodeNativeURI(link)
+		if err != nil {
+			return nil, err
+		}
+		link = encoded
+	}
+	if strings.HasPrefix(strings.TrimSpace(link), "singbox://") {
+		node, err := NativeNode(strings.TrimSpace(link), tag)
+		if err != nil {
+			return nil, err
+		}
+		all := []Object{node}
+		if children, ok := node["_nailink_children"].([]Object); ok {
+			all = append(all, children...)
+		}
+		for _, n := range all {
+			if tls, ok := n["tls"].(map[string]any); ok {
+				if _, explicit := tls["insecure"]; !explicit && opt.AllowInsecure {
+					tls["insecure"] = true
+				}
+			}
+		}
+		return node, nil
+	}
 	if len(link) > 32768 || tag == "" {
 		return nil, errors.New("invalid_node")
 	}

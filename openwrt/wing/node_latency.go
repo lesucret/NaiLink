@@ -19,6 +19,7 @@ import (
 	"github.com/daeuniverse/dae-wing/common"
 	"github.com/daeuniverse/dae-wing/dae"
 	"github.com/daeuniverse/dae-wing/db"
+	"github.com/daeuniverse/dae-wing/routercore"
 	dialer "github.com/daeuniverse/dae/component/outbound/dialer"
 	"github.com/daeuniverse/outbound/netproxy"
 	"github.com/graph-gophers/graphql-go"
@@ -75,9 +76,7 @@ func TestLatencies(ctx context.Context, ids *[]graphql.ID) ([]*LatencyResolver, 
 	if err != nil {
 		return nil, err
 	}
-	if dae.RouterCoreName() == "dae" {
-		storeLatencyResults(results)
-	}
+	storeCoreLatencyResults("dae", results)
 	return results, nil
 }
 
@@ -196,6 +195,11 @@ func testSingleNodeLatency(ctx context.Context, option *dialer.GlobalOption, nod
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	r := &LatencyResolver{NodeID: node.ID, TestedAtV: time.Now(), NodeFingerprintV: latencyNodeFingerprint(node)}
+	if routercore.IsNativeURI(node.Link) {
+		message := "unsupported_protocol"
+		r.MessageV = &message
+		return r
+	}
 	d, err := dialer.NewFromLinkContext(ctx, option, dialer.InstanceOption{DisableCheck: true}, node.Link, "")
 	if err != nil {
 		message := "invalid_node"

@@ -253,15 +253,32 @@ func routerStopProbe(session routerCoreSession) {
 	_ = session.Stop(ctx)
 }
 func ProbeRouterCoreNodes(ctx context.Context, links []string, global daeConfig.Global) ([]RouterCoreProbe, error) {
+	return ProbeRouterCoreNodesProgress(ctx, links, global, nil)
+}
+
+// One private, authenticated core serves the entire bounded test job. Results
+// arrive independently; a slow node cannot hold back successful neighbours.
+func ProbeRouterCoreNodesProgress(ctx context.Context, links []string, global daeConfig.Global, report func(int, RouterCoreProbe)) ([]RouterCoreProbe, error) {
 	select {
 	case routerCoreProbeSlots <- struct{}{}:
 		defer func() { <-routerCoreProbeSlots }()
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+	return probeRouterCoreNodesProgress(ctx, links, global, report)
+}
+
+func probeRouterCoreNodesProgress(ctx context.Context, links []string, global daeConfig.Global, report func(int, RouterCoreProbe)) ([]RouterCoreProbe, error) {
 	conf, names, results, err := routerProbeConfiguration(links, global)
 	if err != nil {
 		return nil, err
+	}
+	if report != nil {
+		for index, result := range results {
+			if _, valid := names[index]; !valid {
+				report(index, result)
+			}
+		}
 	}
 	if len(names) == 0 {
 		return results, nil
@@ -272,25 +289,76 @@ func ProbeRouterCoreNodes(ctx context.Context, links []string, global daeConfig.
 	diagnostics := &routerProbeErrors{codes: map[string]string{}}
 	session, err := routerStartProbe(ctx, conf, diagnostics)
 	if err != nil {
+		// Native validation can reject an option not checked by the adapter.
+		// Isolate such nodes instead of failing every valid node in the job.
+		if err.Error() == "singbox_configuration_invalid" && ctx.Err() == nil {
+			if len(links) > 1 {
+				middle := len(links) / 2
+				var left, right []RouterCoreProbe
+				left, err = probeRouterCoreNodesProgress(ctx, links[:middle], global, report)
+				if err != nil {
+					return nil, err
+				}
+				var shifted func(int, RouterCoreProbe)
+				if report != nil {
+					shifted = func(i int, r RouterCoreProbe) { report(i+middle, r) }
+				}
+				right, err = probeRouterCoreNodesProgress(ctx, links[middle:], global, shifted)
+				return append(left, right...), err
+			}
+			results[0] = RouterCoreProbe{Tested: time.Now(), Message: "invalid_native_config"}
+			if report != nil {
+				report(0, results[0])
+			}
+			return results, nil
+		}
 		return nil, err
 	}
 	stop := sync.OnceFunc(func() { routerStopProbe(session) })
 	defer stop()
 	var workers sync.WaitGroup
-	for index, name := range names {
-		index, name := index, name
+	// At most eight HTTP requests (and their two address families) at once.
+	// Waiting is outside each node's latency timer, matching dae tests.
+	work := make(chan int)
+	for range min(8, len(names)) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			dialer, err := proxy.SOCKS5("tcp", routercore.SocksAddress(session.ports.Mixed), &proxy.Auth{User: name, Password: session.ports.Secret}, &net.Dialer{Timeout: 8 * time.Second})
-			if err != nil {
-				results[index] = RouterCoreProbe{Tested: time.Now(), Message: "test_failed"}
-				return
+			for index := range work {
+				name := names[index]
+				if ctx.Err() != nil {
+					continue
+				}
+				dialer, err := proxy.SOCKS5("tcp", routercore.SocksAddress(session.ports.Mixed), &proxy.Auth{User: name, Password: session.ports.Secret}, &net.Dialer{Timeout: 8 * time.Second})
+				if err != nil {
+					results[index] = RouterCoreProbe{Tested: time.Now(), Message: "test_failed"}
+				} else {
+					results[index] = routerProbeHTTP(ctx, dialer.(proxy.ContextDialer), global)
+				}
+				if !results[index].Alive {
+					results[index].Message = diagnostics.message(name, results[index].Message)
+				}
+				if report != nil && ctx.Err() == nil {
+					report(index, results[index])
+				}
 			}
-			results[index] = routerProbeHTTP(ctx, dialer.(proxy.ContextDialer), global)
 		}()
 	}
+	for index := range names {
+		select {
+		case work <- index:
+		case <-ctx.Done():
+		}
+	}
+	close(work)
 	workers.Wait()
+	select {
+	case <-session.exit:
+		if ctx.Err() == nil {
+			return results, errors.New("probe_core_exited")
+		}
+	default:
+	}
 	// Wait for native stderr to drain before collecting its fixed error codes.
 	// No original message, URL, address or credential is retained or returned.
 	stop()
@@ -298,6 +366,9 @@ func ProbeRouterCoreNodes(ctx context.Context, links []string, global daeConfig.
 		if !results[index].Alive && results[index].Message != "cancelled" {
 			results[index].Message = diagnostics.message(name, results[index].Message)
 		}
+	}
+	if ctx.Err() != nil {
+		return results, ctx.Err()
 	}
 	return results, nil
 }
@@ -329,7 +400,7 @@ func routerProbeHTTP(ctx context.Context, dialer proxy.ContextDialer, global dae
 	if len(addresses) == 0 {
 		addresses = []string{target.Hostname()}
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	started := time.Now()
 	completed := make(chan RouterCoreProbe, len(addresses))

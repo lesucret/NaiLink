@@ -76,7 +76,7 @@ func singBoxNodeOutbounds(conf *daeConfig.Config) ([]sbObject, map[string]bool, 
 			continue
 		}
 		names[name] = true
-		outbounds = append(outbounds, out)
+		outbounds = append(outbounds, routercore.ExpandNode(out)...)
 	}
 	return outbounds, names, warnings, problems
 }

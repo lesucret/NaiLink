@@ -78,7 +78,8 @@ export function QueryProvider({ children, colorScheme, themeMode, setThemeMode }
           const error = (response as ClientError).response?.errors?.[0]
 
           if (error) {
-            toast.error(error.message)
+            if (!/^latency_job_|^test_job_|^core_changed$|^invalid_test_job$/.test(error.message))
+              toast.error(error.message)
 
             if (error.message === 'access denied') {
               if (routerMode) routerSessionExpiredAtom.set(true)

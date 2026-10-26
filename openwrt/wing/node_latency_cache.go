@@ -6,6 +6,7 @@ import (
 	"github.com/daeuniverse/dae-wing/dae"
 	"github.com/daeuniverse/dae-wing/db"
 	"github.com/graph-gophers/graphql-go"
+	"time"
 )
 
 func latencyNodeFingerprint(node *db.Node) [32]byte {
@@ -13,6 +14,25 @@ func latencyNodeFingerprint(node *db.Node) [32]byte {
 }
 
 var latencyCacheCore = "dae" // guarded by nodeLatencyCache.mu
+
+func storeCoreLatencyResults(core string, results []*LatencyResolver) bool {
+	nodeLatencyCache.mu.Lock()
+	defer nodeLatencyCache.mu.Unlock()
+	if dae.RouterCoreName() != core {
+		return false
+	}
+	if latencyCacheCore != core {
+		nodeLatencyCache.items = map[uint]*LatencyResolver{}
+		latencyCacheCore = core
+	}
+	for _, r := range results {
+		if r != nil {
+			nodeLatencyCache.items[r.NodeID] = cloneLatencyResolver(r)
+		}
+	}
+	nodeLatencyCache.updatedAt = time.Now()
+	return true
+}
 
 func mergeRuntimeLatencyResults(manual, automatic map[uint]*LatencyResolver) {
 	for id, value := range automatic {

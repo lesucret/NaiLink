@@ -108,7 +108,7 @@ function NodeRow({
         <Button
           variant="ghost"
           size="sm"
-          className="panel-node-probe"
+          className="panel-node-probe disabled:opacity-100"
           loading={tests.pending.has(node.id)}
           disabled={tests.busy}
           aria-label={`${t('latency.testNode')} ${name}`}
@@ -569,6 +569,7 @@ export function NodeResource({
       <ResourceGroupPicker resource={addingNode} onClose={() => setAddingNode(null)} />
       <QRCodeModal ref={qrCodeModalRef} opened={openedQRCodeModal} onClose={() => setOpenedQRCodeModal(false)} />
       <ImportResourceFormModal
+        resourceKind="node"
         title={t('node')}
         opened={openedImportNodeFormModal}
         onClose={() => setOpenedImportNodeFormModal(false)}

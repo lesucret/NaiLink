@@ -28,6 +28,7 @@ SOURCES = (
     "graphql/mutation.go",
     "graphql/root_schema.go",
     "dae/runtime.go",
+    "db/node_utils.go",
     "dae-core/component/outbound/dialer/dialer.go",
     "dae-core/component/outbound/dialer/register.go",
     "dae-core/component/interface_manager.go",
@@ -50,7 +51,7 @@ class BackendPrepareTests(unittest.TestCase):
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text((ROOT / "wing" / relative).read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
         (self.root / "dae-core/control").mkdir(parents=True, exist_ok=True)
-        (self.root / "db").mkdir(parents=True)
+        (self.root / "db").mkdir(parents=True, exist_ok=True)
 
     def test_runtime_patch_is_reproducible_and_idempotent(self):
         PREPARE.prepare(self.root)
