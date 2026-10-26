@@ -3,7 +3,9 @@ package routercore
 
 import (
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"net"
 	"net/url"
@@ -87,7 +89,7 @@ func Node(link, tag string, opt NodeOptions) (Object, error) {
 		return nil, errors.New("invalid_node")
 	}
 	used := map[string]bool{"name": true, "remarks": true, "group": true}
-	allowed := strings.Fields("security sni peer serverName alpn insecure allowInsecure allow_insecure skip-cert-verify fp fingerprint type net network host path serviceName service_name authority mode flow pbk publicKey sid shortId encryption packetEncoding uuid password method cipher plugin obfs obfs-password obfsPassword mport ports hop-interval hopInterval upmbps downmbps up down congestion_control congestion-control udp_relay_mode udp-relay-mode zero_rtt_handshake disable_sni udp-over-tcp udp_over_tcp uot name remarks group headerType spx udp")
+	allowed := strings.Fields("security sni peer serverName alpn insecure allowInsecure allow_insecure skip-cert-verify fp fingerprint type net network host path serviceName service_name authority mode flow pbk publicKey sid shortId encryption packetEncoding uuid password method cipher plugin obfs obfs-password obfsPassword mport ports hop-interval hopInterval upmbps downmbps up down congestion_control congestion-control udp_relay_mode udp-relay-mode zero_rtt_handshake disable_sni udp-over-tcp udp_over_tcp uot name remarks group headerType spx udp ech support-x25519mlkem768")
 	known := map[string]bool{}
 	for _, key := range allowed {
 		known[key] = true
@@ -166,6 +168,16 @@ func Node(link, tag string, opt NodeOptions) (Object, error) {
 	}
 	switch u.Scheme {
 	case "ss":
+		// Several exporters include an explicit plain TCP marker. It is not
+		// WebSocket/plugin transport and must not disable application UDP.
+		for _, key := range []string{"type", "net", "network"} {
+			if kind := get(key); kind != "" && kind != "tcp" && kind != "raw" {
+				return nil, OptionProblem("unsupported_transport", key)
+			}
+		}
+		if header := get("headerType"); header != "" && header != "none" {
+			return nil, OptionProblem("unsupported_header_type", "headerType")
+		}
 		if password == "" {
 			decoded, e := decode64(username)
 			if e != nil {
@@ -252,11 +264,22 @@ func Node(link, tag string, opt NodeOptions) (Object, error) {
 			if _, ok := t["utls"]; !ok {
 				t["utls"] = Object{"enabled": true, "fingerprint": "chrome"}
 			}
+			if hybrid := get("support-x25519mlkem768"); hybrid != "" {
+				if hybrid != "true" && hybrid != "1" {
+					return nil, OptionProblem("unsupported_reality_key_share", "support-x25519mlkem768")
+				}
+				if opt.Warn != nil {
+					opt.Warn("support-x25519mlkem768 表示服务端支持混合密钥交换；兼容内核保留所选指纹的原生密钥协商和 REALITY 认证，不改变公钥、短 ID 或指纹。")
+				}
+			}
 		}
 		if err := nodeTransport(result, q, used); err != nil {
 			return nil, err
 		}
 	case "hy2", "hysteria2":
+		if security := get("security"); security != "" && security != "tls" {
+			return nil, OptionProblem("unsupported_tls", "security")
+		}
 		if q.Get("fp") != "" || q.Get("fingerprint") != "" {
 			return nil, errors.New("unsupported_quic_fingerprint")
 		}
@@ -341,6 +364,17 @@ func Node(link, tag string, opt NodeOptions) (Object, error) {
 	default:
 		return nil, errors.New("unsupported_protocol")
 	}
+	if ech := get("ech"); ech != "" && ech != "0" && ech != "false" {
+		t, ok := result["tls"].(Object)
+		if !ok || q.Get("security") == "reality" {
+			return nil, OptionProblem("unsupported_ech", "ech")
+		}
+		config, err := echConfig(ech)
+		if err != nil {
+			return nil, err
+		}
+		t["ech"] = Object{"enabled": true, "config": []string{config}}
+	}
 	rejected = nil
 	for key, values := range q {
 		if !used[key] && values[0] != "" {
@@ -352,6 +386,87 @@ func Node(link, tag string, opt NodeOptions) (Object, error) {
 		return nil, OptionProblem("unsupported_node_option", rejected...)
 	}
 	return result, nil
+}
+
+// Preserve the exported ECHConfigList exactly in the native PEM envelope.
+// Never retry without ECH or relax certificate validation on malformed input.
+func echConfig(value string) (string, error) {
+	if len(value) > 16384 {
+		return "", OptionProblem("invalid_ech", "ech")
+	}
+	data, err := decode64(value)
+	if err != nil || len(data) < 6 || int(binary.BigEndian.Uint16(data[:2])) != len(data)-2 {
+		return "", OptionProblem("invalid_ech", "ech")
+	}
+	validPublicName := false
+	knownConfig := false
+	for rest := data[2:]; len(rest) > 0; {
+		if len(rest) < 4 {
+			return "", OptionProblem("invalid_ech", "ech")
+		}
+		n := int(binary.BigEndian.Uint16(rest[2:4]))
+		if n == 0 || len(rest) < 4+n {
+			return "", OptionProblem("invalid_ech", "ech")
+		}
+		body := rest[4 : 4+n]
+		version := binary.BigEndian.Uint16(rest[:2])
+		rest = rest[4+n:]
+		if version != 0xfe0d {
+			continue
+		}
+		knownConfig = true
+		// config_id, kem_id, public_key vector, cipher suites vector,
+		// maximum_name_length, public_name and extensions.
+		if len(body) < 5 {
+			return "", OptionProblem("invalid_ech", "ech")
+		}
+		keyLen := int(binary.BigEndian.Uint16(body[3:5]))
+		if keyLen == 0 || len(body) < 5+keyLen+2 {
+			return "", OptionProblem("invalid_ech", "ech")
+		}
+		body = body[5+keyLen:]
+		suites := int(binary.BigEndian.Uint16(body[:2]))
+		if suites == 0 || suites%4 != 0 || len(body) < 2+suites+2 {
+			return "", OptionProblem("invalid_ech", "ech")
+		}
+		body = body[2+suites:]
+		nameLen := int(body[1])
+		if len(body) < 2+nameLen+2 {
+			return "", OptionProblem("invalid_ech", "ech")
+		}
+		name := string(body[2 : 2+nameLen])
+		body = body[2+nameLen:]
+		if int(binary.BigEndian.Uint16(body[:2])) != len(body)-2 {
+			return "", OptionProblem("invalid_ech", "ech")
+		}
+		if validECHPublicName(name) {
+			validPublicName = true
+		}
+	}
+	if !knownConfig {
+		return "", OptionProblem("unsupported_ech", "ech")
+	}
+	if !validPublicName {
+		return "", OptionProblem("invalid_ech_public_name", "ech")
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "ECH CONFIGS", Bytes: data})), nil
+}
+
+func validECHPublicName(name string) bool {
+	if len(name) == 0 || len(name) > 253 || net.ParseIP(name) != nil {
+		return false
+	}
+	for _, label := range strings.Split(name, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, c := range label {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }
 func nodeTransport(out Object, q url.Values, consumed ...map[string]bool) error {
 	used := map[string]bool{}
@@ -424,15 +539,19 @@ func vmess(link, tag string, opt NodeOptions) (Object, error) {
 	if json.Unmarshal(data, &v) != nil {
 		return nil, errors.New("invalid_node")
 	}
-	allowed := strings.Fields("v ps add port id aid scy net type host path tls sni alpn fp allowInsecure serviceName mode")
+	allowed := strings.Fields("v ps add port id aid scy net type host path tls sni alpn fp allowInsecure serviceName mode class remark headerType verify_cert")
 	known := map[string]bool{}
 	for _, k := range allowed {
 		known[k] = true
 	}
+	var rejected []string
 	for k := range v {
 		if !known[k] {
-			return nil, errors.New("unsupported_vmess_option")
+			rejected = append(rejected, k)
 		}
+	}
+	if len(rejected) > 0 {
+		return nil, OptionProblem("unsupported_vmess_option", rejected...)
 	}
 	text := func(k string) string {
 		var s string
@@ -462,19 +581,41 @@ func vmess(link, tag string, opt NodeOptions) (Object, error) {
 	if v := text("scy"); v != "" {
 		out["security"] = v
 	}
-	if text("type") != "" && text("type") != "none" {
+	if text("headerType") != "" && text("type") != "" && text("headerType") != text("type") {
+		return nil, OptionProblem("conflicting_node_options", "headerType", "type")
+	}
+	if (text("type") != "" && text("type") != "none") || (text("headerType") != "" && text("headerType") != "none") {
 		return nil, errors.New("unsupported_vmess_header")
+	}
+	// class/remark are exporter metadata. verify_cert is a certificate choice,
+	// not metadata: convert its inverse and reject contradictory aliases.
+	var explicitInsecure *bool
+	for key, inverse := range map[string]bool{"allowInsecure": false, "verify_cert": true} {
+		if _, exists := v[key]; !exists {
+			continue
+		}
+		if text(key) == "" {
+			continue
+		}
+		value, e := strconv.ParseBool(text(key))
+		if e != nil || (text(key) != "true" && text(key) != "false" && text(key) != "1" && text(key) != "0") {
+			return nil, OptionProblem("invalid_tls_option", key)
+		}
+		if inverse {
+			value = !value
+		}
+		if explicitInsecure != nil && *explicitInsecure != value {
+			return nil, OptionProblem("conflicting_node_options", "allowInsecure", "verify_cert")
+		}
+		explicitInsecure = &value
 	}
 	if text("tls") == "tls" {
 		t := Object{"enabled": true, "insecure": opt.AllowInsecure}
 		if text("sni") != "" {
 			t["server_name"] = text("sni")
 		}
-		if text("allowInsecure") != "" {
-			if value := text("allowInsecure"); value != "1" && value != "0" && value != "true" && value != "false" {
-				return nil, errors.New("invalid_tls_option")
-			}
-			t["insecure"] = text("allowInsecure") == "1" || text("allowInsecure") == "true"
+		if explicitInsecure != nil {
+			t["insecure"] = *explicitInsecure
 		}
 		if text("alpn") != "" {
 			t["alpn"] = strings.Split(text("alpn"), ",")

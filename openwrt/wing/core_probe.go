@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -219,9 +220,12 @@ func routerProbeConfiguration(links []string, global daeConfig.Global) (*daeConf
 	}
 	return conf, names, results, nil
 }
-func routerStartProbe(ctx context.Context, conf *daeConfig.Config) (*routerSingBoxSession, error) {
+func routerStartProbe(ctx context.Context, conf *daeConfig.Config, hooks ...logrus.Hook) (*routerSingBoxSession, error) {
 	log := logrus.New()
 	log.SetOutput(io.Discard)
+	for _, hook := range hooks {
+		log.AddHook(hook)
+	}
 	session, err := newRouterSingBoxSession(ctx, log, conf, nil, false, func(profile sbObject, ports sbPorts) {
 		users := []sbObject{{"username": "nailink", "password": ports.Secret}}
 		var rules []sbObject
@@ -264,11 +268,13 @@ func ProbeRouterCoreNodes(ctx context.Context, links []string, global daeConfig.
 	if len(global.TcpCheckUrl) == 0 {
 		return nil, errors.New("missing_check_url")
 	}
-	session, err := routerStartProbe(ctx, conf)
+	diagnostics := &routerProbeErrors{codes: map[string]string{}}
+	session, err := routerStartProbe(ctx, conf, diagnostics)
 	if err != nil {
 		return nil, err
 	}
-	defer routerStopProbe(session)
+	stop := sync.OnceFunc(func() { routerStopProbe(session) })
+	defer stop()
 	var workers sync.WaitGroup
 	for index, name := range names {
 		index, name := index, name
@@ -297,7 +303,7 @@ func ProbeRouterCoreNodes(ctx context.Context, links []string, global daeConfig.
 				defer transport.CloseIdleConnections()
 				response, err := (&http.Client{Transport: transport, Timeout: 10 * time.Second}).Do(request)
 				if err != nil {
-					result.Message = "unreachable"
+					result.Message = routerCoreProbeFailure(err)
 				}
 				if err == nil {
 					defer response.Body.Close()
@@ -305,16 +311,91 @@ func ProbeRouterCoreNodes(ctx context.Context, links []string, global daeConfig.
 						result.Alive = true
 						result.Latency = int32(time.Since(started).Milliseconds())
 						result.Message = ""
+					} else {
+						result.Message = "check_target_failed"
 					}
 				}
 			}
 			if ctx.Err() != nil {
-				result.Message = "cancelled"
+				result.Message = routerCoreProbeFailure(ctx.Err())
 			}
 			result.Tested = time.Now()
 			results[index] = result
 		}()
 	}
 	workers.Wait()
+	// Wait for native stderr to drain before collecting its fixed error codes.
+	// No original message, URL, address or credential is retained or returned.
+	stop()
+	for index, name := range names {
+		if !results[index].Alive && results[index].Message != "cancelled" {
+			results[index].Message = diagnostics.message(name, results[index].Message)
+		}
+	}
 	return results, nil
+}
+
+type routerProbeErrors struct {
+	mu    sync.Mutex
+	codes map[string]string
+}
+
+var routerProbeLogNode = regexp.MustCompile(`\[node:(probe-[0-9]+)\]`)
+
+func (*routerProbeErrors) Levels() []logrus.Level {
+	return []logrus.Level{logrus.ErrorLevel, logrus.WarnLevel}
+}
+func (p *routerProbeErrors) Fire(entry *logrus.Entry) error {
+	node := routerProbeLogNode.FindStringSubmatch(entry.Message)
+	if len(node) != 2 {
+		return nil
+	}
+	text := strings.ToLower(entry.Message)
+	var code string
+	switch {
+	case strings.Contains(text, "encryptedclienthelloconfiglist contains no valid configs"):
+		code = "invalid_ech"
+	case strings.Contains(text, "certificate"), strings.Contains(text, "ech rejected"):
+		code = "tls_failed"
+	case strings.Contains(text, "reality verification failed"), strings.Contains(text, "authentication failed"), strings.Contains(text, "invalid password"):
+		code = "authentication_failed"
+	case strings.Contains(text, "no such host"), strings.Contains(text, "dns lookup failed"):
+		code = "dns_failed"
+	case strings.Contains(text, "connection refused"):
+		code = "connection_refused"
+	case strings.Contains(text, "timeout"), strings.Contains(text, "deadline exceeded"):
+		code = "timeout"
+	case strings.Contains(text, "connection reset"), strings.Contains(text, "unexpected eof"):
+		code = "connection_closed"
+	}
+	if code != "" {
+		p.mu.Lock()
+		if p.codes[node[1]] == "" || p.codes[node[1]] == "timeout" {
+			p.codes[node[1]] = code
+		}
+		p.mu.Unlock()
+	}
+	return nil
+}
+func (p *routerProbeErrors) message(name, fallback string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if code := p.codes[name]; code != "" {
+		return code
+	}
+	return fallback
+}
+
+func routerCoreProbeFailure(err error) string {
+	var network net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &network) && network.Timeout()) {
+		return "timeout"
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed) {
+		return "connection_closed"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "cancelled"
+	}
+	return "unreachable"
 }

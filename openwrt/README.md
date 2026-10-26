@@ -1,9 +1,16 @@
 # NaiLink · 奶油互联
 
 支持 OpenWrt、ImmortalWrt、iStoreOS 的现代 LuCI，提供 x86_64 / ARM64 及试验性 ARMv7 / MIPS32 / MIPSel32 的
-IPK 和 APK v3 安装包。当前测试版：[openwrt-v0.6.35](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.35)。
+IPK 和 APK v3 安装包。当前测试版：[openwrt-v0.6.36](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.36)。
 
 本项目从 0.6.14 起更名为 NaiLink（奶油互联），侧边栏显示 **NaiLink**。0.6.13 及更早版本显示 **Daed**。沿用原有包名、服务、路径和配置，可继续保留数据升级。
+
+## 0.6.36 sing-box 节点测试修复
+
+- 兼容 SS 明确的 TCP 标记、HY2 的 TLS 标记、Reality 的混合密钥协商提示和 VMess 导出元数据；不改写原始节点。
+- VMess 的 `verify_cert` 按原值转换，互相矛盾的证书设置拒绝；HY2 的有效 ECH 配置保留，空公开域名和无效配置明确提示，不降级为普通 TLS。
+- 节点测试区分参数不兼容、ECH 配置异常、超时、证书和认证错误；原生错误仅返回固定分类，不回传地址、密码或日志原文。
+- 原有 sing-box `1.14.3-nailink.1` 无需重复下载；配置兼容检查不等于所有订阅线路可用。已在真实 ARM64 路由器复测，并保留现有 sing-box、群组、节点与配置。
 
 ## 0.6.35 节点参数与 Reality 兼容
 

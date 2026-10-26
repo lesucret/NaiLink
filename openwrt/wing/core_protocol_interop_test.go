@@ -29,6 +29,7 @@ func TestRouterCoreProtocolInteroperability(t *testing.T) {
 	var fixture struct {
 		Target, UDP string
 		Cases       []struct{ Name, Link, Failure string }
+		NativeCases []struct{ Name, Link, Failure string }
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -54,7 +55,7 @@ func TestRouterCoreProtocolInteroperability(t *testing.T) {
 	global := daeConfig.Global{TcpCheckUrl: []string{fixture.Target + "/generate_204"}, UdpCheckDns: []string{fixture.UDP}}
 	var links []string
 	var cases []struct{ Name, Link, Failure string }
-	for _, c := range fixture.Cases {
+	for _, c := range append(fixture.Cases, fixture.NativeCases...) {
 		if strings.HasPrefix(c.Link, "juicity:") {
 			continue
 		} // explicitly unsupported by this adapter

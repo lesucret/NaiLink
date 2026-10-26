@@ -18,6 +18,14 @@ describe('latency colors', () => {
     expect(formatLatencyLabel({ ...measured(0), alive: false, message: 'private://password@host' }, translate)).toBe(
       'latency.failed',
     )
+    for (const message of ['unsupported_node_option', 'unsupported_vmess_option', 'invalid_ech']) {
+      expect(formatLatencyLabel({ ...measured(0), alive: false, message }, translate)).toBe(
+        'latency.nodeFailure.parameters',
+      )
+    }
+    expect(formatLatencyLabel({ ...measured(0), alive: false, message: 'invalid_ech_public_name' }, translate)).toBe(
+      'latency.nodeFailure.ech',
+    )
   })
   it.each([
     [0, 'good'],

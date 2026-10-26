@@ -14,7 +14,7 @@ import (
 
 const SingBoxVersion = "1.14.3-nailink.1"
 const SingBoxRelease = "openwrt-v0.6.35"
-const AdapterRevision = 3
+const AdapterRevision = 4
 const BinaryPath = "/usr/libexec/daed/cores/sing-box"
 const TunName = "nailink0"
 

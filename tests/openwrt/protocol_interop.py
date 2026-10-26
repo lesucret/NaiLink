@@ -99,7 +99,7 @@ def run_fixture(args, http_port, udp_port):
         cleanup.callback(cover.shutdown)
         pair = subprocess.check_output([str(args.sing_box), 'generate', 'reality-keypair'], text=True)
         reality_keys = dict(line.split(': ', 1) for line in pair.strip().splitlines())
-        inbounds, cases = [], []
+        inbounds, cases, native_cases = [], [], []
         reality_port = port()
         reality_uuid = '00000000-0000-4000-8000-000000000002'
         inbounds.append({'type': 'vless', 'tag': 'reality-vision', 'listen': '127.0.0.1', 'listen_port': reality_port,
@@ -110,6 +110,7 @@ def run_fixture(args, http_port, udp_port):
         reality_link = (f'vless://{reality_uuid}@127.0.0.1:{reality_port}?security=reality&sni=vless.fixture.test'
                         f'&pbk={reality_keys["PublicKey"]}&sid=abcd&fp=chrome&flow=xtls-rprx-vision&headerType=none&spx=%2F')
         cases.append({'Name': 'vless-reality-vision', 'Link': reality_link})
+        native_cases.append({'Name': 'reality-exporter-hybrid-hint', 'Link': reality_link + '&support-x25519mlkem768=true'})
         cases.append({'Name': 'vless-reality-reject-wrong-short-id', 'Link': reality_link.replace('sid=abcd', 'sid=ffff'), 'Failure': 'unreachable'})
         for method in ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"]:
             number = port()
@@ -119,6 +120,8 @@ def run_fixture(args, http_port, udp_port):
             inbounds.append({"type": "shadowsocks", "tag": method, "listen": "127.0.0.1", "listen_port": number, "method": method, "password": password})
             user = base64.urlsafe_b64encode((method + ":" + password).encode()).decode().rstrip("=")
             cases.append({"Name": method, "Link": f"ss://{user}@127.0.0.1:{number}"})
+            if method == 'chacha20-ietf-poly1305':
+                native_cases.append({'Name': 'ss-exporter-plain-tcp', 'Link': f'ss://{user}@127.0.0.1:{number}?type=tcp&headerType=none'})
             if method.startswith('2022'):
                 cases.append({"Name": method + '-sip002', "Link": f"ss://{method}:{urllib.parse.quote(password, safe='')}@127.0.0.1:{number}"})
         for kind in ['vmess', 'trojan']:
@@ -133,6 +136,13 @@ def run_fixture(args, http_port, udp_port):
                 if kind == 'vmess':
                     config = {'v': '2', 'ps': kind + '-' + transport, 'add': '127.0.0.1', 'port': str(number), 'id': uuid, 'aid': '0', 'scy': 'auto', 'net': transport, 'type': 'none', 'host': '', 'path': '/fixture' if transport == 'ws' else '', 'tls': 'tls', 'sni': 'vless.fixture.test'}
                     link = 'vmess://' + base64.b64encode(json.dumps(config).encode()).decode()
+                    if transport == 'ws':
+                        exported = {**config, 'class': 3, 'remark': 'export label', 'headerType': 'none', 'verify_cert': True}
+                        native_cases.append({'Name': 'vmess-exporter-certificate-verified', 'Link': 'vmess://' + base64.b64encode(json.dumps(exported).encode()).decode()})
+                        exported['sni'] = 'mismatch.invalid'
+                        native_cases.append({'Name': 'vmess-exporter-certificate-rejected', 'Link': 'vmess://' + base64.b64encode(json.dumps(exported).encode()).decode(), 'Failure': 'tls_failed'})
+                        exported['verify_cert'] = False
+                        native_cases.append({'Name': 'vmess-exporter-explicit-insecure', 'Link': 'vmess://' + base64.b64encode(json.dumps(exported).encode()).decode()})
                 else:
                     link = f"trojan://fixture%40pass%3A2026@127.0.0.1:{number}?sni=vless.fixture.test&type={transport}"
                     if transport == 'ws':
@@ -181,8 +191,20 @@ def run_fixture(args, http_port, udp_port):
         inbounds.append({"type": "hysteria2", "tag": "hy2-obfs", "listen": "127.0.0.1", "listen_port": number, "users": [{"name": "fixture", "password": "fixture"}], "tls": tls, "obfs": {"type": "salamander", "password": "fixture-obfs"}})
         link = f"hy2://fixture@127.0.0.1:{number}?sni=fixture.test&insecure=1&obfs=salamander&obfs-password=fixture-obfs"
         cases.append({"Name": "hysteria2-salamander", "Link": link})
+        native_cases.append({'Name': 'hy2-exporter-tls-marker', 'Link': link + '&security=tls'})
         cases.append({"Name": "hysteria2-obfs-alias-ports", "Link": link.replace("obfs-password", "obfsPassword").replace(f":{number}?", ":1?") + f"&ports={number}-{number}"})
         cases.append({"Name": "hysteria2-mport", "Link": link.replace(f":{number}?", ":1?") + f"&mport={number}"})
+        # Exercise the exported base64 ECH list against a real independently
+        # generated ECH server; merely accepting the config is insufficient.
+        ech_pair = subprocess.check_output([str(args.sing_box), 'generate', 'ech-keypair', 'vless.fixture.test'], text=True)
+        def pem_block(kind):
+            return ech_pair.split('-----BEGIN ' + kind + '-----', 1)[1].split('-----END ' + kind + '-----', 1)[0]
+        ech_encoded = ''.join(pem_block('ECH CONFIGS').split())
+        ech_key = '-----BEGIN ECH KEYS-----' + pem_block('ECH KEYS') + '-----END ECH KEYS-----\n'
+        number = port(True)
+        inbounds.append({'type':'hysteria2','tag':'hy2-ech','listen':'127.0.0.1','listen_port':number,
+                         'users':[{'password':'ech-fixture'}], 'tls':{**vless_tls,'ech':{'enabled':True,'key':[ech_key]}}})
+        native_cases.append({'Name':'hy2-exporter-ech','Link':f'hy2://ech-fixture@127.0.0.1:{number}?security=tls&sni=vless.fixture.test&ech='+urllib.parse.quote(ech_encoded,safe='')})
         juicity_config = None
         if args.juicity_server:
             number = port(True)
@@ -195,7 +217,7 @@ def run_fixture(args, http_port, udp_port):
         config = work / "config.json"
         config.write_text(json.dumps({"log": {"level": "error"}, "inbounds": inbounds, "outbounds": [{"type": "direct", "tag": "direct"}]}), encoding="utf-8")
         casefile = work / "cases.json"
-        casefile.write_text(json.dumps({"Target": f"http://127.0.0.1:{http_port}", "UDP": f"127.0.0.1:{udp_port}", "Cases": cases}), encoding="utf-8")
+        casefile.write_text(json.dumps({"Target": f"http://127.0.0.1:{http_port}", "UDP": f"127.0.0.1:{udp_port}", "Cases": cases, "NativeCases":native_cases}), encoding="utf-8")
         subprocess.run([str(args.sing_box), "check", "-c", str(config)], check=True)
         with (work / "server.log").open("w", encoding="utf-8") as log:
             process = subprocess.Popen([str(args.sing_box), "run", "-c", str(config)], stdout=log, stderr=subprocess.STDOUT)

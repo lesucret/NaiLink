@@ -1,3 +1,19 @@
+# 0.6.36 sing-box 手动 / 订阅节点测试
+
+日期：2026-10-26；分支：`codex/singbox-probe-compat`。测试版：[openwrt-v0.6.36](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.36)。
+
+- **现场复现**：原接口拒绝 SS `type=tcp`、HY2 `security=tls`、Reality 服务端密钥交换提示和 VMess 的 `class/remark/headerType/verify_cert`。部分失败发生在网络连接之前；另有机场样本的 TCP 端口实际超时，不能归为同一协议故障。
+- **转换和安全**：仅接纳已有等价语义的标记及导出元数据。证书校验显式值保留、冲突拒绝；有效 Base64 ECH 列表转换为原生 PEM，格式或公开域名异常明确拒绝，不删 ECH、不放宽认证。原 URI 和数据库内容不变；适配版本递增使旧计划失效。
+- **错误诊断**：每个临时原生测试进程只在内存中读取自身测试节点的错误，返回固定超时、证书、认证、DNS 等分类；不保存或回传原文、地址、URL、密码。并发、范围限定、取消和优先保留具体错误有回归。面板单独显示参数不兼容和 ECH 配置异常。
+- **独立协议服务端**：新增 SS 导出标记、HY2 TLS / 真实 ECH 握手、Reality 混合协商提示、VMess 元数据与显式证书选择用例。验证 HEAD、完整负载、分段传输及 UDP；证书不匹配且要求验证的 VMess 仍失败。原 dae 和其他协议用例保留。
+- **真实软路由**：ARM64 OpenWrt 25.12.5 / Linux 6.12.94，先保留已校验的 0.6.35 原生回退包并停服备份，再安装 0.6.36 原生 APK。升级前后全部用户表摘要一致，仍运行原 sing-box。通过真实面板测试接口复测：手动 SS、一个 HY2、两条 Reality、两条 VLESS/TLS/WS 和两条 VMess 都返回延迟；另一 HY2 的 ECH 列表公开域名为空，明确报告配置异常，未自动改链。已观测的机场 SS/AnyTLS 超时保留为失败，不伪造通过。
+- **联网与分流**：Windows LAN 客户端经路由器访问 Google generate_204、YouTube robots、ChatGPT robots，分别返回 204 / 200 / 200；实际连接链确认 ChatGPT 走 AI 群组、Google 走默认群组。此项不代表账户登录、出口信誉或所有机场线路可用。
+- **隔离与浏览器**：完整 IPv4/IPv6 BPF/TUN/nft、双向切换、失败回退、WAN/fw4 恢复通过。真实 LuCI/rpcd/procd 夹具验证电脑和 390px 手机触控模拟的切换、下载失败恢复、待生效编辑和数据保留；浏览器夹具为 API-only。前端 87 项测试、类型检查、Go 并发、Python 安装 / 发布 / 文档、五架构与十 SDK 构建通过，44 个运行包核对 ELF 载荷一致。
+
+未改用户的节点、证书设置、订阅计划、群组、DNS 或分流；AdZero 按操作者原状态保持关闭。手机为触控模拟；不声称所有节点、全部固件或长期负载均通过。无新增依赖，不更换 0.6.35 已固定的可选内核。
+
+---
+
 # 0.6.35 节点兼容、域名拨号与真机切换
 
 日期：2026-10-26；分支：`codex/core-node-compat`。测试版：[openwrt-v0.6.35](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.35)。

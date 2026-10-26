@@ -19,6 +19,16 @@ export function formatLatencyLabel(result: NodeLatencyProbeResult | undefined, t
     return undefined
   }
   if (result.alive === false) {
+    if (result.message === 'invalid_ech_public_name') return t('latency.nodeFailure.ech')
+    // Native adapter failures happen before a network request. Keep them
+    // distinct from line timeouts without echoing arbitrary backend text.
+    if (
+      result.message &&
+      result.message !== 'invalid_node' &&
+      /^(?:unsupported_[a-z_]+|invalid_[a-z_]+|conflicting_node_options)$/.test(result.message)
+    ) {
+      return t('latency.nodeFailure.parameters')
+    }
     const reasons = {
       invalid_node: 'invalidNode',
       dns_failed: 'dns',

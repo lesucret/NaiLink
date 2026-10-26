@@ -262,6 +262,8 @@
     "nodesMeasured": "{{ count }} nodes measured",
     "failed": "Failed",
     "nodeFailure": {
+      "parameters": "Unsupported options",
+      "ech": "Invalid ECH config",
       "invalidNode": "Invalid options",
       "dns": "DNS failed",
       "tls": "Certificate error",
