@@ -58,15 +58,17 @@ type maintenanceGeodataReceipt struct {
 	State    string `json:"state"`
 }
 type maintenanceStatus struct {
-	Success bool            `json:"success"`
-	Code    string          `json:"code,omitempty"`
-	Current string          `json:"current"`
-	Latest  *releaseInfo    `json:"latest,omitempty"`
-	Job     *maintenanceJob `json:"job,omitempty"`
-	Geodata *releaseInfo    `json:"geodata,omitempty"`
+	Success bool                   `json:"success"`
+	Code    string                 `json:"code,omitempty"`
+	Current string                 `json:"current"`
+	Latest  *releaseInfo           `json:"latest,omitempty"`
+	Job     *maintenanceJob        `json:"job,omitempty"`
+	Geodata *releaseInfo           `json:"geodata,omitempty"`
+	Cores   *coreMaintenanceStatus `json:"cores,omitempty"`
 }
 type maintenanceManager struct {
 	stateDir, configDir, versionFile, lockFile, installLock, initScript string
+	coreBinary                                                          string
 	fetch                                                               func(context.Context, string, string, int64) error
 	run                                                                 func(context.Context, ...string) ([]byte, error)
 	graph                                                               func(context.Context, string, any) error
@@ -195,7 +197,7 @@ func (m *maintenanceManager) current() string {
 	return value
 }
 func (m *maintenanceManager) status() maintenanceStatus {
-	s := maintenanceStatus{Success: true, Current: m.current()}
+	s := maintenanceStatus{Success: true, Current: m.current(), Cores: m.coreStatus()}
 	var latest releaseInfo
 	if readMaintenanceJSON(filepath.Join(m.stateDir, "latest.json"), &latest) == nil && releaseTag.MatchString(latest.Tag) {
 		s.Latest = &latest
@@ -214,11 +216,14 @@ func (m *maintenanceManager) status() maintenanceStatus {
 	if readMaintenanceJSON(filepath.Join(m.stateDir, "job.json"), &job) == nil {
 		// An exited/killed worker must never leave an endless spinner. A freshly
 		// queued task has a short grace period while procd starts the worker.
-		if job.State == "running" || job.State == "queued" && queuedMaintenanceStale(job.Updated, m.now().Unix()) || job.Code == "apply_unconfirmed" {
+		if job.State == "running" || job.State == "queued" && queuedMaintenanceStale(job.Updated, m.now().Unix()) || job.Code == "apply_unconfirmed" || uncertainCoreJob(job) {
 			if lock, err := maintenanceLock(m.lockFile, false); err == nil {
 				var fresh maintenanceJob
-				if readMaintenanceJSON(filepath.Join(m.stateDir, "job.json"), &fresh) == nil && fresh.ID == job.ID && (fresh.State == "running" || fresh.State == "queued" && queuedMaintenanceStale(fresh.Updated, m.now().Unix()) || fresh.Code == "apply_unconfirmed") {
+				if readMaintenanceJSON(filepath.Join(m.stateDir, "job.json"), &fresh) == nil && fresh.ID == job.ID && (fresh.State == "running" || fresh.State == "queued" && queuedMaintenanceStale(fresh.Updated, m.now().Unix()) || fresh.Code == "apply_unconfirmed" || uncertainCoreJob(fresh)) {
 					job.State, job.Code, job.Phase = "error", "interrupted", "finished"
+					if strings.HasPrefix(job.Action, "core_switch_") {
+						m.reconcileCoreJob(&job)
+					}
 					if job.Action == "geodata" && job.Batch != "" && job.Batch == receipt.Target {
 						current, _ := os.Readlink(filepath.Join(m.configDir, "geodata", "current"))
 						switch receipt.State {
@@ -248,7 +253,7 @@ func (m *maintenanceManager) save(job *maintenanceJob, phase string) error {
 	return writeMaintenanceJSON(filepath.Join(m.stateDir, "job.json"), job)
 }
 func (m *maintenanceManager) start(action string) maintenanceStatus {
-	if action != "check" && action != "update" && action != "geodata" {
+	if action != "check" && action != "update" && action != "geodata" && !coreMaintenanceAction(action) {
 		return maintenanceStatus{Code: "invalid_action"}
 	}
 	lock, err := maintenanceLock(m.lockFile, false)
@@ -260,6 +265,7 @@ func (m *maintenanceManager) start(action string) maintenanceStatus {
 		return maintenanceStatus{Code: "unsafe_state"}
 	}
 	var previous maintenanceJob
+	if core := m.coreStatus(); core.Phase == "switching" { return maintenanceStatus{Code: "busy"} }
 	var pending maintenanceGeodataReceipt
 	if readMaintenanceJSON(filepath.Join(m.configDir, "geodata", "activation.json"), &pending) == nil && pending.State == "applying" {
 		return maintenanceStatus{Code: "apply_unconfirmed"}
@@ -320,7 +326,11 @@ func (m *maintenanceManager) worker(ctx context.Context, expectedID string) erro
 	case "geodata":
 		err = m.updateGeodata(ctx, &job)
 	default:
-		err = errors.New("invalid_action")
+		if coreMaintenanceAction(job.Action) {
+			err = m.maintainCore(ctx, &job)
+		} else {
+			err = errors.New("invalid_action")
+		}
 	}
 	job.State = "success"
 	if err != nil {
@@ -330,6 +340,9 @@ func (m *maintenanceManager) worker(ctx context.Context, expectedID string) erro
 	return m.save(&job, "finished")
 }
 func maintenanceCode(err error) string {
+	if code := coreMaintenanceCode(err.Error()); code != "" {
+		return code
+	}
 	// Only stable codes cross the UI boundary; network/installer errors may
 	// contain full URLs, query strings or configuration paths.
 	for _, code := range []string{"busy", "download_failed", "invalid_release", "checksum_failed", "invalid_installer", "install_failed", "install_missing", "version_changed", "unsupported", "no_space", "backup_failed", "service_not_ready", "custom_geodata", "invalid_geodata", "apply_failed", "apply_unconfirmed", "rollback_failed", "configuration_modified", "backend_unavailable", "unsafe_state", "state_failed", "update_rolled_back", "interrupted"} {
@@ -610,7 +623,7 @@ func (m *maintenanceManager) graphQL(ctx context.Context, query string, value an
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+token)
-	response, err := (&http.Client{Timeout: 45 * time.Second, Transport: &http.Transport{Proxy: nil}}).Do(request)
+	response, err := (&http.Client{Timeout: 180 * time.Second, Transport: &http.Transport{Proxy: nil}}).Do(request)
 	if err != nil {
 		return errors.New("backend_unavailable")
 	}
@@ -623,6 +636,14 @@ func (m *maintenanceManager) graphQL(ctx context.Context, query string, value an
 		return errors.New("backend_unavailable")
 	}
 	if len(envelope.Errors) > 0 {
+		for _, raw := range envelope.Errors {
+			var item struct{ Message string }
+			if json.Unmarshal(raw, &item) == nil {
+				if code := coreMaintenanceCode(item.Message); code != "" {
+					return errors.New(code)
+				}
+			}
+		}
 		return errors.New("apply_failed")
 	}
 	if len(envelope.Data) == 0 {
@@ -644,7 +665,7 @@ func maintenanceCLI(command, configDir, jobID string) {
 	switch command {
 	case "status":
 		json.NewEncoder(os.Stdout).Encode(manager.status())
-	case "check", "update", "geodata":
+	case "check", "update", "geodata", "core_check_dae", "core_check_singbox", "core_install_singbox", "core_switch_dae", "core_switch_singbox":
 		json.NewEncoder(os.Stdout).Encode(manager.start(command))
 	case "worker":
 		if !regexp.MustCompile(`^[a-f0-9]{24}$`).MatchString(jobID) {

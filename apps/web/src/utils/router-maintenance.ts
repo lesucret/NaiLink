@@ -1,6 +1,34 @@
+export type MaintenanceAction =
+  | 'check'
+  | 'update'
+  | 'geodata'
+  | 'core_check_dae'
+  | 'core_check_singbox'
+  | 'core_install_singbox'
+  | 'core_switch_dae'
+  | 'core_switch_singbox'
+export interface CorePlan {
+  target: 'dae' | 'sing-box'
+  revision: string
+  compatible: boolean
+  installed: boolean
+  warnings: string[]
+  problems: string[]
+  nodes: number
+  groups: number
+}
+export interface CoreStatus {
+  current: string
+  phase: string
+  code?: string
+  installed: boolean
+  supported: boolean
+  version: string
+  plan?: CorePlan
+}
 export interface MaintenanceJob {
   id: string
-  action: 'check' | 'update' | 'geodata'
+  action: MaintenanceAction
   state: 'queued' | 'running' | 'success' | 'error'
   phase: string
   code?: string
@@ -15,6 +43,7 @@ export interface MaintenanceStatus {
   latest?: { version: string; tag: string; checked: number }
   geodata?: { version: string; tag: string; checked: number }
   job?: MaintenanceJob
+  cores?: CoreStatus
 }
 
 export const maintenanceMessages: Record<string, string> = {
@@ -46,6 +75,33 @@ export const maintenanceMessages: Record<string, string> = {
   state_failed: '无法保存维护状态，请检查存储空间和文件权限。',
   interrupted: '维护任务被中断，请重新检查当前版本与运行日志后再重试。',
   operation_failed: '维护操作未完成，请查看运行日志后重试。',
+  core_incompatible: '兼容性检查未通过，原内核和配置保留。请查看检查报告。',
+  core_configuration_changed: '运行配置或规则库已变化，请重新检查兼容性再切换。',
+  singbox_not_installed: '请先安装可选 sing-box 内核。',
+  singbox_version_mismatch: 'sing-box 版本校验未通过，请重新安装管理的固定版本。',
+  singbox_configuration_invalid: 'sing-box 配置校验未通过，原内核仍在运行。',
+  core_environment_unsupported: '系统能力检查未通过，请查看高级设置中的兼容性信息。',
+  core_network_conflict: '检测到已有 TUN、路由标记或其他代理接管，未强制切换。',
+  core_rolled_back: '目标内核未能就绪，已恢复原内核、节点和运行配置。',
+  core_rollback_failed: '原内核自动恢复未完成，配置和恢复快照已保留。请重新启动服务并查看日志，避免卸载。',
+  core_cleanup_failed: '目标内核资源清理未确认，为避免双重接管已停止切换。请重启服务并检查日志。',
+  core_stop_failed: '原内核尚未确认停止，未启动目标内核。请重启服务后再试。',
+  core_state_failed: '无法保存内核状态，请检查剩余存储和文件权限。',
+  core_snapshot_failed: '无法保存当前运行配置，未停止原内核。',
+  core_start_failed: '目标内核未能启动，正在检查原内核恢复结果。',
+  core_not_ready: '目标内核未通过就绪检查，请查看恢复结果和日志。',
+  core_request_failed: '内核操作未获后台确认，请重新读取状态，并检查运行日志；现有配置保留。',
+  core_dns_failed: '目标内核 DNS 查询未通过检查，正在恢复原内核。',
+  core_restarted: '内核意外退出后已自动重启，并通过连接检查。',
+  core_recovery_failed: '内核自动恢复失败，管理面板和原有配置仍保留。请检查日志后重启服务。',
+  core_startup_rolled_back: '所选内核启动失败，已恢复 dae 和原运行配置。',
+  core_interrupted_recovered: '上次切换被中断，已恢复原内核和运行配置。',
+  core_reload_rolled_back: '新配置未能就绪，已恢复原运行配置。',
+  core_connectivity_failed: '目标内核的实际连接检查失败，已尝试恢复原内核。',
+  core_dependency_failed: '无法安装固件匹配的 TUN 依赖，原内核未停止；不会替换系统内核或软件源。',
+  nftables_unavailable: '需要可用的 nftables / fw4，未改动其他代理规则。',
+  core_exited: '内核进程已退出，请重新启动服务并查看日志。',
+  core_not_running: '当前内核未就绪，请先恢复服务。',
 }
 
 export function jobActive(job?: MaintenanceJob) {
@@ -102,4 +158,4 @@ async function maintenanceRPC(method: 'maintenance' | 'maintain', action?: strin
   return result
 }
 export const readMaintenance = () => maintenanceRPC('maintenance')
-export const startMaintenance = (action: 'check' | 'update' | 'geodata') => maintenanceRPC('maintain', action)
+export const startMaintenance = (action: MaintenanceAction) => maintenanceRPC('maintain', action)

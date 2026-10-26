@@ -22,6 +22,11 @@ import urllib.parse
 
 class HTTP(http.server.BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
+    def do_HEAD(self):
+        self.send_response(204)
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
     def do_GET(self):
         data = b"protocol-payload" * 4096 if self.path in ('/payload', '/stream') else b""
         self.send_response(200 if data else 204)
@@ -102,10 +107,12 @@ def run_fixture(args, http_port, udp_port):
                     inbound['transport'] = {'type': 'ws', 'path': '/fixture'}
                 inbounds.append(inbound)
                 if kind == 'vmess':
-                    config = {'v': '2', 'ps': kind + '-' + transport, 'add': '127.0.0.1', 'port': str(number), 'id': uuid, 'aid': '0', 'scy': 'auto', 'net': transport, 'type': 'none', 'host': '', 'path': '/fixture', 'tls': 'tls', 'sni': 'vless.fixture.test'}
+                    config = {'v': '2', 'ps': kind + '-' + transport, 'add': '127.0.0.1', 'port': str(number), 'id': uuid, 'aid': '0', 'scy': 'auto', 'net': transport, 'type': 'none', 'host': '', 'path': '/fixture' if transport == 'ws' else '', 'tls': 'tls', 'sni': 'vless.fixture.test'}
                     link = 'vmess://' + base64.b64encode(json.dumps(config).encode()).decode()
                 else:
-                    link = f"trojan://fixture%40pass%3A2026@127.0.0.1:{number}?sni=vless.fixture.test&type={transport}&path=%2Ffixture"
+                    link = f"trojan://fixture%40pass%3A2026@127.0.0.1:{number}?sni=vless.fixture.test&type={transport}"
+                    if transport == 'ws':
+                        link += '&path=%2Ffixture'
                 cases.append({'Name': kind + '-tls-' + transport, 'Link': link})
         number = port(True)
         inbounds.append({'type': 'tuic', 'tag': 'tuic', 'listen': '127.0.0.1', 'listen_port': number,
@@ -123,7 +130,11 @@ def run_fixture(args, http_port, udp_port):
             elif transport == "grpc":
                 inbound["transport"] = {"type": "grpc", "service_name": "fixture"}
             inbounds.append(inbound)
-            link = f"vless://{uuid}@127.0.0.1:{number}?security=tls&sni=vless.fixture.test&type={transport}&path=%2Ffixture&serviceName=fixture"
+            link = f"vless://{uuid}@127.0.0.1:{number}?security=tls&sni=vless.fixture.test&type={transport}"
+            if transport == 'ws':
+                link += '&path=%2Ffixture'
+            elif transport == 'grpc':
+                link += '&serviceName=fixture'
             cases.append({"Name": "vless-tls-" + transport, "Link": link})
             cases.append({"Name": "vless-tls-" + transport + "-certificate-rejected", "Link": link.replace("sni=vless.fixture.test", "sni=mismatch.invalid"), "Failure": "tls_failed"})
         for kind in ["hysteria2", "anytls"]:
@@ -170,7 +181,9 @@ def run_fixture(args, http_port, udp_port):
                 env = os.environ.copy()
                 env["DAED_PROTOCOL_CASES"] = str(casefile)
                 env["SSL_CERT_FILE"] = str(work / "vless-cert.pem")
-                return subprocess.run(["go", "test", "-count=1", "-timeout=120s", "-v", "./graphql/service/node", "./dae", "github.com/daeuniverse/dae/control", "-run", "TestRouterProtocolInteroperability$|TestRouterHTTPProtocolDownload$|TestRouterConnectionProtocolFailover$"], cwd=args.wing, env=env).returncode
+                if args.client_singbox:
+                    env['DAED_TEST_SINGBOX'] = str(args.client_singbox.resolve(strict=True))
+                return subprocess.run(["go", "test", "-count=1", "-timeout=120s", "-v", "./graphql/service/node", "./dae", "github.com/daeuniverse/dae/control", "-run", "TestRouterProtocolInteroperability$|TestRouterCoreProtocolInteroperability$|TestRouterHTTPProtocolDownload$|TestRouterConnectionProtocolFailover$"], cwd=args.wing, env=env).returncode
             finally:
                 process.terminate()
                 process.wait(timeout=5)
@@ -184,4 +197,5 @@ if __name__ == "__main__":
     parser.add_argument("--wing", type=Path, required=True)
     parser.add_argument("--sing-box", type=Path, required=True)
     parser.add_argument("--juicity-server", type=Path, help="Optional independent official Juicity server (tested with v0.5.0)")
+    parser.add_argument('--client-singbox', type=Path, help='Also exercise the optional native sing-box adapter')
     raise SystemExit(run(parser.parse_args()))

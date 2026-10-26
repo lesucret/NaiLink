@@ -9,6 +9,25 @@ if ! command -v jsonfilter >/dev/null 2>&1 || [ ! -r /usr/share/libubox/jshn.sh 
 fi
 . /usr/share/libubox/jshn.sh
 
+check_only=0
+selected_core=''
+strict_core=0
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--listen) listen_only=1 ;;
+		--check) check_only=1 ;;
+		--core) [ "$#" -gt 1 ] || exit 1; selected_core=$2; strict_core=1; shift ;;
+		*) exit 1 ;;
+	esac
+	shift
+done
+if [ -z "$selected_core" ]; then
+	if [ -e /etc/daed/cores/state.json ]; then
+		selected_core=$(jsonfilter -i /etc/daed/cores/state.json -e '@.current' 2>/dev/null) || exit 1
+	else selected_core=dae; fi
+fi
+case "$selected_core" in dae|sing-box) ;; *) echo 'Invalid saved core selection.' >&2; exit 1 ;; esac
+
 config_value() {
 	uci -q get "daed.main.$1" 2>/dev/null || printf '%s\n' "$2"
 }
@@ -22,7 +41,7 @@ listen_address() {
 	printf '%s:%s\n' "$host" "$port"
 }
 
-if [ "${1:-}" = --listen ]; then
+if [ "${listen_only:-0}" = 1 ]; then
 	listen_address
 	exit $?
 fi
@@ -53,6 +72,7 @@ json_add_string release "$release"
 json_add_string architecture "$arch"
 json_add_string kernel "$kernel"
 json_add_string listen "$listen"
+json_add_string core "$selected_core"
 json_add_array checks
 
 if [ -r /etc/openwrt_release ] && [ -x /sbin/uci ]; then
@@ -65,6 +85,7 @@ case "$arch" in
 	armv7|armv7l|mips|mipsel|mipsle) add_check architecture warning "$arch: experimental userspace build; tested common 32-bit kernels cannot load required BPF callbacks. Kernel probes must pass; complete datapath validation is still required." ;;
 	*) add_check architecture error 'Supported: x86_64/ARM64; experimental: ARMv7/MIPS32/MIPSel32. ARMv5/v6, MIPS64 and other CPUs have no release package.' ;;
 esac
+if [ "$selected_core" = dae ]; then
 major=${kernel%%.*}
 minor=${kernel#*.}; minor=${minor%%.*}
 case "$major.$minor" in
@@ -127,6 +148,16 @@ if [ -n "$kernel_config" ]; then
 else
 	add_check kernel_options warning 'Kernel config is unavailable; BTF/version checks alone cannot prove eBPF will load.'
 fi
+else
+	case "$arch" in x86_64|aarch64) ;; *) add_check core_architecture error 'This sing-box integration supports x86_64 and ARM64 only.' ;; esac
+	if [ -c /dev/net/tun ]; then add_check tun ok 'TUN device is available.'
+	else add_check tun error 'TUN is unavailable. Install the matching firmware kmod-tun package; no kernel replacement is attempted.'; fi
+	if command -v nft >/dev/null 2>&1 && nft -j list tables >/dev/null 2>&1; then
+		add_check nftables ok 'nftables is available; sing-box validates actual routing at startup.'
+	else add_check nftables error 'sing-box requires working nftables / fw4. Other proxy rules are not changed.'; fi
+	if [ -x /usr/libexec/daed/cores/sing-box ]; then add_check core_binary ok 'Managed sing-box is installed; its pinned version is checked by the manager.'
+	else add_check core_binary error 'Install the optional sing-box core from NaiLink first.'; fi
+fi
 if [ -n "$listen" ]; then
 	add_check listen ok "Management address: $listen"
 else
@@ -153,7 +184,9 @@ done
 for other in dae passwall passwall2 openclash mihomo sing-box; do
 	active=$(printf '%s' "$services" | jsonfilter -e "@[\"$other\"].instances.*.running" 2>/dev/null) || active=''
 	case "$active" in
-		*true*) add_check "other_$other" warning "$other is running. Check DNS, interfaces and traffic interception before enabling the proxy; no other service is changed." ;;
+		*true*)
+			if [ "$strict_core" = 1 ]; then add_check "other_$other" error "$other is running. Stop conflicting proxy interception before switching; NaiLink does not stop other services."
+			else add_check "other_$other" warning "$other is running. Check DNS, interfaces and traffic interception before enabling the proxy; no other service is changed."; fi ;;
 	esac
 done
 json_close_array
@@ -171,6 +204,6 @@ json_add_boolean autostart "$boot"
 version=$(cat /usr/share/daed-router/version 2>/dev/null) || version=uninstalled
 json_add_string version "$version"
 json_dump
-if [ "${1:-}" = --check ]; then
+if [ "$check_only" = 1 ]; then
 	[ "$compatible" = 1 ]
 fi

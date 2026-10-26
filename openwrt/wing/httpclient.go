@@ -18,6 +18,9 @@ import (
 
 var HttpTransport = &http.Transport{
 	DialContext: func(ctx context.Context, _ string, address string) (net.Conn, error) {
+		if conn, handled, err := RouterCoreDialContext(ctx, "tcp", address); handled {
+			return conn, err
+		}
 		host, rawPort, err := net.SplitHostPort(address)
 		if err != nil {
 			return nil, err

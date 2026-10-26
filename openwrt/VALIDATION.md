@@ -1,3 +1,20 @@
+# 0.6.34 dae / sing-box 首版切换
+
+日期：2026-10-26；分支：`codex/dae-singbox`。测试版：[openwrt-v0.6.34](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.34)。
+
+- **统一管理**：单个管理 API / 数据库、单个活动内核。转换基于当前运行配置，数据库用户表与待生效编辑保持原样。版本、架构、静态 ELF、SHA256 和配置先检查，通过就绪检查后才提交新选择。可选程序来自官方 1.14.3 OpenWrt 包，仅取静态程序，不运行上游服务脚本；通用 glibc 包不用于 OpenWrt 安装。
+- **恢复与所有权**：切换前保存私有配置快照与事务记录；候选失败先清理，再恢复旧内核；中断时恢复原选择。任务 ID 对账处理 worker/响应丢失。进程意外退出有限次重启；资源归属不明时拒绝第二个接管。管理 nftables/fw4 include、固定 TUN/策略表及上游随机重定向表，不清空其他插件规则，不改共享链默认策略。
+- **dae 稳定性**：发现旧控制面的 Accept / UDP 读取循环可能在重载后抢读首个新请求。每代 Serve 使用独立复制句柄，取消上下文关闭自己的句柄；回归验证旧读取被唤醒、下一代首个 TCP 和 UDP 请求正常。
+- **真实数据链路**：`tests/openwrt/core_netns.py` 在独立 mount/PID/network/cgroup 中运行真实 dae BPF、官方静态 sing-box、TUN、nftables、独立 VLESS 服务端和 LAN 客户端。验证 IPv4/IPv6 的 TCP、DNS、独立 AI 入站分流、HTTP/UDP 节点诊断、统计、dae → sing-box → dae、后期启动失败回退、子进程 SIGKILL 恢复、WAN 断开再连接。策略规则还原且外部 nft 哨兵表保留，用户表摘要与未应用编辑不变。
+- **防火墙测试边界**：上述测试的 fw4 重载夹具生成真实 nftables 表，检查 input/forward 原 drop 策略与 TUN include，未在 WSL 主机或用户路由器改规则。它不是 OpenWrt 真机 fw4 全流程测试。原生 OpenWrt 24.10.4 / 25.12.4 LuCI/rpcd 另行验证授权与维护接口。
+- **电脑 / 手机**：`browser-cores.cjs` 使用真实 LuCI/rpcd/procd、私有 HTTPS 下载夹具及官方静态内核，覆盖下载失败重试、双向切换、启动失败回退、待生效配置、390px 手机触控与刷新恢复。此处 daemon 是 API-only，不代替前述 LAN 测试。
+- **协议互通**：独立服务端验证新增 sing-box 适配层的 SS/SS2022、VMess、VLESS、Trojan、HY2、AnyTLS、TUIC，检查 HTTP 测试、完整负载、分段响应、UDP DNS 和错误证书拒绝。修复 HY2 单个跳跃端口需转换为原生端口区间的问题；无效区间直接拒绝。原 dae 的协议与备用连接回归也通过，未使用机场凭据。
+- **范围**：首版可选 sing-box 为 x86_64 / ARM64；ARMv7 / MIPS 保持原 dae 限制。协议和规则的已适配边界见[使用说明](../docs/core-switching.md)，没有接入 mihomo。保留五架构、十 SDK、原生包载荷校验、更新/规则库失败恢复与现有协议回归门禁。
+
+未修改或升级用户路由器。ARM64 目前验证构建、静态内核载荷和交叉运行门禁，没有 ARM64 路由硬件长时间负载结果。磁盘故障、断电与不能确认资源归属的情况不能保证自动恢复；原有配置和诊断记录保留。
+
+---
+
 # 0.6.33 维护失败恢复复查
 
 日期：2026-10-26；分支：`codex/maintenance-recovery`。

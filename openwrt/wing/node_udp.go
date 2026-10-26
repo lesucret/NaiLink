@@ -54,6 +54,22 @@ func TestNodeUDP(parent context.Context, id graphql.ID) (*UDPTestResolver, error
 	if err != nil {
 		return nil, fmt.Errorf("invalid global configuration")
 	}
+	if dae.RouterCoreName() == "sing-box" {
+		value, probeErr := dae.ProbeRouterCoreUDP(ctx, nodes[0].Link, parsed.Global)
+		if probeErr != nil {
+			return nil, fmt.Errorf("sing-box UDP test unavailable")
+		}
+		r := &UDPTestResolver{LatencyResolver: &LatencyResolver{NodeID: nodes[0].ID, AliveVal: value.Alive, TestedAtV: value.Tested}}
+		if len(parsed.Global.UdpCheckDns) > 0 {
+			r.TargetV = parsed.Global.UdpCheckDns[0]
+		}
+		if value.Alive {
+			r.LatencyMsV = &value.Latency
+		} else {
+			r.MessageV = &value.Message
+		}
+		return r, nil
+	}
 	log := logrus.New()
 	log.SetOutput(io.Discard)
 	option := dialer.NewGlobalOption(&parsed.Global, log)

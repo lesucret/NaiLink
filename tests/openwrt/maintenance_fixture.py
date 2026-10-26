@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 
 class MaintenanceFixture:
-    def __init__(self, root, project, probe):
+    def __init__(self, root, project, probe, singbox_package=None):
         self.root = root
         self.state = {"next": "0.6.99", "geo": "20261025", "fail": "", "requests": []}
         fixture = root / "tmp/maintenance-https"
@@ -27,6 +27,9 @@ class MaintenanceFixture:
                 if outer.state["fail"] == "download":
                     self.send_error(503)
                     return
+                if singbox_package and path == "/SagerNet/sing-box/releases/download/v1.14.3/sing-box_1.14.3_openwrt_x86_64.ipk":
+                    data=singbox_package.read_bytes()
+                    self.send_response(200);self.send_header("Content-Length",str(len(data)));self.end_headers();self.wfile.write(data);return
                 version = outer.state["next"]
                 tag = "openwrt-v" + version
                 failure = "echo 'NaiLink: Update failed; previous installation and service state restored.' >&2\nexit 23\n" if outer.state['fail'] == 'install' else ''

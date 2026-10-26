@@ -15,7 +15,7 @@
 
 管理节点、订阅和群组，测试节点延迟，查看实时流量，配置 DNS 与路由。支持电脑、手机和多种主题，沿用路由器 LuCI 登录，无需另设账户。
 
-基于 [daed](https://github.com/daeuniverse/daed) 二次开发，独立维护。当前版本为 **[0.6.33 测试版](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.33)**，提供 IPK / APK v3 安装包。
+基于 [daed](https://github.com/daeuniverse/daed) 二次开发，独立维护。当前版本为 **[0.6.34 测试版](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.34)**，提供 IPK / APK v3 安装包。
 
 ## 安装前
 
@@ -32,7 +32,7 @@
 以 **root** 登录路由器 SSH，执行下面一行，打开中文菜单：
 
 ```sh
-uclient-fetch -O /tmp/nailink-install.sh https://github.com/slobys/NaiLink/releases/download/openwrt-v0.6.33/install.sh && sh /tmp/nailink-install.sh --menu --release openwrt-v0.6.33
+uclient-fetch -O /tmp/nailink-install.sh https://github.com/slobys/NaiLink/releases/download/openwrt-v0.6.34/install.sh && sh /tmp/nailink-install.sh --menu --release openwrt-v0.6.34
 ```
 
 选择 **1 安装 / 更新**。安装后运行 `nailink` 可再次打开菜单，也可选择 **2 卸载**、**3 检查环境** 或 **0 退出**。
@@ -41,13 +41,13 @@ uclient-fetch -O /tmp/nailink-install.sh https://github.com/slobys/NaiLink/relea
 
 **0.6.32 新增**：点击面板顶部版本号检查并在线更新；在 **高级设置 → GeoIP / GeoSite 规则库** 一键更新分流数据；运行日志按级别显示不同颜色。旧版本请先用上面的命令或 `nailink` 菜单升级一次，之后即可在面板更新。
 
-**0.6.33 加强失败恢复**：在线更新停服前准备并校验旧版安装包，失败时尝试恢复原安装和配置；规则库加载途中退出后，下次启动撤回未确认的新批次并恢复旧规则。更新中刷新、重新登录和手机操作也补充了恢复提示。多内核尚未集成，见[技术规划](docs/multi-core-plan.md)。
+**0.6.34 新增内核切换**：点击面板顶部“内核”，可按需安装 sing-box、检查兼容性，再与 dae 切换。保留节点、订阅、配置和未应用的修改，失败尝试自动回退；同时修复 dae 重载后首次连接可能失败的问题。首版 sing-box 支持 x86_64 / ARM64，使用 TUN 和 nftables；不是所有高级参数都能转换。[支持范围与使用方法 →](docs/core-switching.md)
 
 沿用 LuCI 登录授权与细分诊断，更新权限仅向管理员开放。[后台打不开 →](https://slobys.github.io/NaiLink/troubleshooting.html#luci-access)
 
 保留 0.6.30 的代理就绪检查与有效 DNS 分流关联恢复，可用 `nailink --check-network` 查看诊断。[恢复机制与限制 →](https://slobys.github.io/NaiLink/maintenance.html#restart-recovery)
 
-旧版菜单遇到 Raw 下载失败时，可运行 `nailink --install --release openwrt-v0.6.33`。如果 GitHub 也无法解析，先检查路由器自身 DNS。[下载故障排查 →](https://slobys.github.io/NaiLink/troubleshooting.html#download)
+旧版菜单遇到 Raw 下载失败时，可运行 `nailink --install --release openwrt-v0.6.34`。如果 GitHub 也无法解析，先检查路由器自身 DNS。[下载故障排查 →](https://slobys.github.io/NaiLink/troubleshooting.html#download)
 
 ## 开始使用
 
@@ -61,7 +61,7 @@ uclient-fetch -O /tmp/nailink-install.sh https://github.com/slobys/NaiLink/relea
 
 ## 源码与交流
 
-[完整源码包](https://github.com/slobys/NaiLink/releases/download/openwrt-v0.6.33/daed-openwrt-source.tar.gz) · [构建说明](openwrt/README.md#开发) · [验证记录](openwrt/VALIDATION.md) · [Logo](docs/site/assets/nailink-logo.png)
+[完整源码包](https://github.com/slobys/NaiLink/releases/download/openwrt-v0.6.34/daed-openwrt-source.tar.gz) · [构建说明](openwrt/README.md#开发) · [验证记录](openwrt/VALIDATION.md) · [Logo](docs/site/assets/nailink-logo.png)
 
 编译请使用完整源码包，或 `git clone --recurse-submodules https://github.com/slobys/NaiLink.git`。GitHub 的 Download ZIP 不包含后端子模块。
 

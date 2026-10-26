@@ -31,6 +31,7 @@ def main():
     parser.add_argument("--old-proxy", type=Path, help="Use the previous gateway until upgrade for cache/performance comparisons")
     parser.add_argument("--maintenance-fixture", action="store_true", help="Use private trusted HTTPS/procd fixtures for online-update tests")
     parser.add_argument("--geodata-probe", type=Path, help="Test-only geodata fixture generator")
+    parser.add_argument("--singbox-package", type=Path, help="Pinned official static package; run API-only daemon inside the disposable rootfs")
     args = parser.parse_args()
     if os.geteuid() != 0:
         parser.error("Run as root with an isolated, checksum-verified OpenWrt rootfs")
@@ -53,6 +54,9 @@ def main():
         device = root / "dev" / name
         device.unlink(missing_ok=True)
         os.mknod(device, stat.S_IFCHR | 0o666, os.makedev(1, minor))
+    if args.singbox_package:
+        (root / "dev/net").mkdir(exist_ok=True)
+        os.mknod(root / "dev/net/tun",stat.S_IFCHR|0o600,os.makedev(10,200))
     subprocess.run([str(args.proxy), "--config", str(root / "etc/daed"), "--prepare"], check=True)
     files = {
         "www/cgi-bin/daed-router": project / "openwrt/files/luci-cgi",
@@ -158,7 +162,12 @@ def main():
 
     def start_daemon(binary):
         env = dict(os.environ, DAED_SUBSCRIPTION_PROXY_HELPER=str(helper))
-        process = subprocess.Popen([str(binary), "run", "--api-only", "--config", str(root / "etc/daed"), "--listen", "127.0.0.1:12025"], env=env, stdout=streams[2], stderr=subprocess.STDOUT)
+        command=[str(binary), "run", "--api-only", "--config", str(root / "etc/daed"), "--listen", "127.0.0.1:12025"]
+        if args.singbox_package:
+            installed=root/"usr/bin/fixture-daed";staging=root/"usr/bin/.fixture-daed";shutil.copy2(binary,staging);staging.replace(installed)
+            command=["chroot",str(root),"/usr/bin/fixture-daed","run","--api-only","--config","/etc/daed","--listen","127.0.0.1:12025"]
+            env['DAED_SUBSCRIPTION_PROXY_HELPER']='/usr/libexec/daed/subscription-proxy'
+        process = subprocess.Popen(command, env=env, stdout=streams[2], stderr=subprocess.STDOUT)
         for _ in range(100):
             try:
                 with urllib.request.urlopen("http://127.0.0.1:12025/", timeout=1) as response:
@@ -189,7 +198,7 @@ def main():
             time.sleep(0.05)
         if args.maintenance_fixture:
             from maintenance_fixture import MaintenanceFixture
-            maintenance = MaintenanceFixture(root, project, args.geodata_probe)
+            maintenance = MaintenanceFixture(root, project, args.geodata_probe, args.singbox_package)
             namespace = maintenance.procd()
             namespace.maintenance_namespace = True
             processes.append(namespace)
@@ -208,7 +217,17 @@ def main():
                 if action == "stop":
                     result.write_text(json.dumps(answer))
                     break
-                if action == "snapshot":
+                if action == "core_fault" and args.singbox_package:
+                    managed=root/"usr/libexec/daed/cores/sing-box";backup=managed.with_name("sing-box.real")
+                    state_file=root/"etc/daed/cores/state.json"
+                    if state_file.exists() and json.loads(state_file.read_text()).get('current')!='dae':raise ValueError('Fault injection requires inactive optional core')
+                    if request.get('fail'):
+                        if backup.exists():raise ValueError('Fault already installed')
+                        managed.rename(backup);managed.write_text('#!/bin/sh\ncase "$1" in version|check) exec /usr/libexec/daed/cores/sing-box.real "$@" ;; *) exit 77 ;; esac\n');managed.chmod(0o755)
+                    else:backup.replace(managed)
+                elif action == "compare":
+                    answer["unchanged"]=snapshot()==baseline
+                elif action == "snapshot":
                     baseline = snapshot()
                     answer["tables"] = len(baseline)
                 elif action == "upgrade":

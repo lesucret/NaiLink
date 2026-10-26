@@ -8,7 +8,7 @@ import { jobActive, maintenanceMessages, newerVersion } from '~/utils/router-mai
 function MaintenanceProgress({ type }: { type: 'update' | 'geodata' }) {
   const { query, mutation } = useRouterMaintenance()
   const job = query.data?.job
-  if (!job || (type === 'geodata' ? job.action !== 'geodata' : job.action === 'geodata')) return null
+  if (!job || (type === 'geodata' ? job.action !== 'geodata' : !['update', 'check'].includes(job.action))) return null
   const phases: Record<string, string> = {
     queued: '任务已排队',
     checking: '正在检查发布版本与配置',

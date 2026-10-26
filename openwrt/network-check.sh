@@ -64,7 +64,7 @@ printf '\n[Local NaiLink readiness and automatic selection candidates]\n'
 listen=$(/usr/libexec/daed/check --listen 2>/dev/null) || listen=''
 if [ -n "$listen" ] && command -v uclient-fetch >/dev/null 2>&1; then
 	status=$(uclient-fetch -q -T 3 -O - "http://$listen/health/ready?details=1" 2>/dev/null) || status='{}'
-	for field in phase configured listening initialized dns_ready routing_ready restart_dns restored_dns_entries; do
+	for field in core phase configured listening initialized dns_ready routing_ready restart_dns restored_dns_entries; do
 		value=$(printf '%s' "$status" | jsonfilter -e "@.$field" 2>/dev/null)
 		printf '%s=%s\n' "$field" "${value:-unavailable}"
 	done

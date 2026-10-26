@@ -2,9 +2,19 @@
 package node
 
 import (
+	"github.com/daeuniverse/dae-wing/dae"
 	"github.com/daeuniverse/dae-wing/db"
 	"github.com/graph-gophers/graphql-go"
 )
+
+var latencyCacheCore = "dae" // guarded by nodeLatencyCache.mu
+func syncLatencyCacheCore() {
+	core := dae.RouterCoreName()
+	if core != latencyCacheCore {
+		nodeLatencyCache.items = map[uint]*LatencyResolver{}
+		latencyCacheCore = core
+	}
+}
 
 func latencyCacheEntriesBeforeQuery(ids *[]graphql.ID) map[uint]*LatencyResolver {
 	if ids != nil {
@@ -24,6 +34,7 @@ func latencyCacheEntriesBeforeQuery(ids *[]graphql.ID) map[uint]*LatencyResolver
 func latencyCacheForNodes(nodes []db.Node, all bool, before map[uint]*LatencyResolver) map[uint]*LatencyResolver {
 	nodeLatencyCache.mu.Lock()
 	defer nodeLatencyCache.mu.Unlock()
+	syncLatencyCacheCore()
 	results := make(map[uint]*LatencyResolver, len(nodes))
 	live := make(map[uint]bool, len(nodes))
 	for _, node := range nodes {

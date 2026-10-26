@@ -230,6 +230,7 @@ func routerCloseControlPlane(plane *control.ControlPlane) error {
 }
 
 type RouterReadiness struct {
+	Core       string `json:"core"`
 	Phase      string `json:"phase"`
 	Ready      bool   `json:"ready"`
 	Configured bool   `json:"configured"`
@@ -239,7 +240,7 @@ type RouterReadiness struct {
 	RestoredDNS int    `json:"restored_dns_entries"`
 }
 
-func ReadRouterReadiness(details bool) RouterReadiness {
+func readRouterDaeReadiness(details bool) RouterReadiness {
 	result := RouterReadiness{Phase: "starting"}
 	if !routerLifecycleMu.TryRLock() {
 		return result

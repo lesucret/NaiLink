@@ -6,9 +6,11 @@ import { useLocation } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useGeneralQuery, useRunMutation } from '~/apis'
 import { CommunityLinks } from '~/components/CommunityLinks'
+import { RouterCore } from '~/components/RouterCore'
 import { RouterVersion } from '~/components/RouterMaintenance'
 import { ThemePicker } from '~/components/ThemePicker'
 import { Button } from '~/components/ui/button'
+import { useRouterMaintenance } from '~/hooks/useRouterMaintenance'
 
 export function RouterHeader() {
   const { t } = useTranslation()
@@ -23,8 +25,11 @@ export function RouterHeader() {
           : t('panel.dashboard')
   const query = useGeneralQuery()
   const run = useRunMutation()
-  const saving =
-    useIsMutating({ predicate: (mutation) => mutation.options.mutationKey?.[0] !== 'node-latency-test' }) > 0
+  const mutations = useIsMutating({
+    predicate: (mutation) => mutation.options.mutationKey?.[0] !== 'node-latency-test',
+  })
+  const { busy: maintenanceBusy } = useRouterMaintenance()
+  const saving = mutations > 0 || maintenanceBusy
   const [operation, setOperation] = useState<'apply' | 'toggle'>('toggle')
   const [failed, setFailed] = useState(false)
   const running = query.data?.general.dae.running ?? false
@@ -50,6 +55,7 @@ export function RouterHeader() {
         <CommunityLinks />
         <div className="router-toolbar-actions flex flex-wrap items-center gap-2">
           <RouterVersion />
+          <RouterCore />
           <ThemePicker variant="compact" />
           <span
             role="status"

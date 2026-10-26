@@ -42,6 +42,8 @@ def router_auth(text):
 
 
 def router_lifecycle(text):
+    if 'Core *routerCoreSwitch' not in text:
+        text = text.replace('Callback chan<- error', 'Callback chan<- error\n\tCore *routerCoreSwitch', 1)
     if '*RouterGeodataTransaction' not in text:
         text = text.replace('Callback chan<- error', 'Callback chan<- error\n\tGeodata *RouterGeodataTransaction', 1)
     if 'routerSetGeodataRoot(externGeoDataDirs)' not in text:
@@ -92,7 +94,27 @@ def router_lifecycle(text):
         text = text.replace('\n\t// Print configuration.', '\n\tdnsCache = routerRestoreRestartDNS(log, conf, dnsCache)\n\t// Print configuration.', 1)
     if 'routerMarkServing(c)' not in text:
         text = text.replace('<-readyChan', '<-readyChan\n\t\t\trouterMarkServing(c)')
-    return text.replace('\n\t\t\tWaitForNetwork(log)', '\n\t\t\trouterWaitForNetwork(log)')
+    text = text.replace('\n\t\t\tWaitForNetwork(log)', '\n\t\t\trouterWaitForNetwork(log)')
+    if 'func routerRunDAE(' not in text:
+        begin = text.index('func Run(')
+        body = text[begin:].replace('func Run(', 'func routerRunDAE(', 1).replace('dry bool)', 'dry bool, reload chan *ReloadMessage)', 1)
+        body = body.replace('defer close(GracefullyExit)', '').replace('ChReloadConfigs', 'reload')
+        text = text[:begin] + body
+    if 'routerSessionFinished := make(chan struct{})' not in text:
+        begin = text.index('func routerRunDAE(')
+        head = text.index('\n', begin)
+        text = text[:head] + '\n\trouterSessionFinished := make(chan struct{})\n\tdefer close(routerSessionFinished)' + text[head:]
+        body = text[begin:].replace('reload <- nil', 'select { case reload <- nil: case <-routerSessionFinished: }')
+        text = text[:begin] + body
+    if 'var routerServeWG sync.WaitGroup' not in text:
+        text = text.replace('defer close(routerSessionFinished)', 'var routerFinishOnce sync.Once\n\trouterFinishSession := func() { routerFinishOnce.Do(func(){close(routerSessionFinished)}) }\n\tdefer routerFinishSession()', 1)
+        text = text.replace('var listener *control.Listener', 'var listener *control.Listener\n\tvar routerServeWG sync.WaitGroup', 1)
+        text = text.replace('go func(c *control.ControlPlane, log *logrus.Logger, port uint16) {', 'routerServeWG.Add(1)\n\tgo func(c *control.ControlPlane, log *logrus.Logger, port uint16) {\n\t\tdefer routerServeWG.Done()', 1)
+        text = text.replace('go func(c *control.ControlPlane, log *logrus.Logger) {', 'routerServeWG.Add(1)\n\t\t\t\tgo func(c *control.ControlPlane, log *logrus.Logger) {\n\t\t\t\t\tdefer routerServeWG.Done()', 1)
+        text = text.replace('if e := routerCloseControlPlane(c); e != nil {', 'e := routerCloseControlPlane(c)\n\trouterFinishSession()\n\trouterServeWG.Wait()\n\tif listener != nil { _ = listener.Close() }\n\tif e != nil {', 1)
+    text = text.replace('\t\t\t\t<-readyChan\n\t\t\trouterMarkServing(c)', '\t\t\t\tif !<-readyChan { break loop }\n\t\t\trouterMarkServing(c)')
+    text = text.replace('\t\t\t<-readyChan\n\t\t\trouterMarkServing(c)', '\t\t\tif !<-readyChan { return }\n\t\t\trouterMarkServing(c)')
+    return text
 
 
 def router_control_dial(text):
@@ -185,7 +207,16 @@ def replace_go_function(text, signature, body):
 def router_bootstrap(text):
     text = replace_go_function(text, 'func (c *ControlPlane) resolveIp46WithBootstrapResolvers(',
                                '\treturn c.routerResolveBootstrap(ctx, host, network, race, resolve)')
-    return text.replace('\t"github.com/daeuniverse/outbound/protocol/direct"\n', '')
+    text = text.replace('\t"github.com/daeuniverse/outbound/protocol/direct"\n', '')
+    marker = 'func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err error) {'
+    if 'routerOwnServingListener(c.ctx, listener)' not in text:
+        text = text.replace(marker, marker + '''
+    owned, releaseListener, listenerErr := routerOwnServingListener(c.ctx, listener)
+    if listenerErr != nil { select {case readyChan <- false: default:}; return listenerErr }
+    defer releaseListener()
+    listener = owned
+''', 1)
+    return text
 
 
 def router_udp_pool_test(text):
@@ -371,8 +402,12 @@ type Mutation {
     mutation_text = mutation_text[:begin] + run + mutation_text[end:]
     schema_file = root / "graphql/root_schema.go"
     schema_text = schema_file.read_text(encoding="utf-8")
+    if 'corePlan(target:' not in schema_text:
+        schema_text = schema_text.replace('type Query {', 'type Query {\n    coreStatus: String! @hasRole(role: ADMIN)\n    corePlan(target: String!): String! @hasRole(role: ADMIN)', 1)
+        schema_text = schema_text.replace('type Mutation {', 'type Mutation {\n    switchCore(target: String!, revision: String!, operation: String): Int! @hasRole(role: ADMIN)', 1)
     if 'activateGeodata(target:' not in schema_text:
         schema_text = schema_text.replace('type Mutation {', 'type Mutation {\n    activateGeodata(target: String!, previous: String!): Int! @hasRole(role: ADMIN)', 1)
+    schema_text = schema_text.replace('switchCore(target: String!, revision: String!):', 'switchCore(target: String!, revision: String!, operation: String):')
     schema_file.write_text(schema_text, encoding="utf-8", newline="\n")
     generated["graphql/root_schema.go"] = digest(schema_text.encode())
     mutation_file.write_text(mutation_text, encoding="utf-8", newline="\n")
@@ -393,6 +428,19 @@ type Mutation {
         ("dae/router_network_ready.go", "network_ready.go"),
         ("dae/router_geodata_update.go", "geodata_update.go"),
         ("dae/router_geodata_update_test.go", "geodata_update_test.go"),
+        ("dae/router_core_manager.go", "core_manager.go"),
+        ("dae-core/control/router_core_listener.go", "core_listener.go"),
+        ("dae-core/control/router_core_listener_test.go", "core_listener_test.go"),
+        ("dae/router_singbox_config.go", "singbox_config.go"),
+        ("dae/router_singbox_runtime.go", "singbox_runtime.go"),
+        ("dae/router_core_network.go", "core_network.go"),
+        ("dae/router_core_overview.go", "core_overview.go"),
+        ("dae/router_core_config_test.go", "core_config_test.go"),
+        ("dae/router_core_protocol_interop_test.go", "core_protocol_interop_test.go"),
+        ("dae/router_core_probe.go", "core_probe.go"),
+        ("graphql/service/node/router_core_probe.go", "node_core_probe.go"),
+        ("dae/router_core_manager_test.go", "core_manager_test.go"),
+        ("graphql/router_core_mutations.go", "core_mutations.go"),
         ("graphql/router_geodata_mutation.go", "geodata_mutation.go"),
         ("graphql/router_geodata_mutation_test.go", "geodata_mutation_test.go"),
         ("dae/router_restart_state.go", "restart_state.go"),
@@ -425,6 +473,8 @@ type Mutation {
         generated[relative] = digest(data)
     cache_file = root / "graphql/service/node/latency_cache.go"
     cache_text = cache_file.read_text(encoding="utf-8")
+    if 'syncLatencyCacheCore()' not in cache_text:
+        cache_text = cache_text.replace('func storeLatencyResults(results []*LatencyResolver) {\n\tnodeLatencyCache.mu.Lock()\n\tdefer nodeLatencyCache.mu.Unlock()', 'func storeLatencyResults(results []*LatencyResolver) {\n\tnodeLatencyCache.mu.Lock()\n\tdefer nodeLatencyCache.mu.Unlock()\n\tsyncLatencyCacheCore()')
     cache_text = cache_text.replace('// Reading results must never start network probes.', '// Reading results must never start network probes.\n\tbefore := latencyCacheEntriesBeforeQuery(ids)') if 'before := latencyCacheEntriesBeforeQuery(ids)' not in cache_text else cache_text
     cache_text = cache_text.replace('merged := snapshotCachedLatencyResults()', 'merged := latencyCacheForNodes(nodes, ids == nil, before)')
     cache_file.write_text(cache_text, encoding="utf-8", newline="\n")
@@ -456,6 +506,23 @@ type Mutation {
             raise ValueError("Unknown runtime test fixture; refusing to overwrite: " + relative)
         destination.write_bytes(data)
         generated[relative] = digest(data)
+    for source in sorted((HERE / "corelib").glob("*.go")):
+        relative = "routercore/" + source.name
+        destination = root / relative
+        data = source.read_bytes()
+        if destination.exists() and destination.read_bytes() != data and previous.get(relative) != digest(destination.read_bytes()):
+            raise ValueError("Unknown core-manager shared source: " + relative)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+        generated[relative] = digest(data)
+    cmd_file = root / "cmd/run.go"
+    cmd_text = cmd_file.read_text(encoding="utf-8")
+    if 'dae.InitializeRouterCores(cfgDir)' not in cmd_text:
+        cmd_text = cmd_text.replace('// Read config from --config cfgDir.', 'if err := dae.InitializeRouterCores(cfgDir); err != nil { logrus.Fatal("Core state unavailable: ", err) }\n\n\t\t\t// Read config from --config cfgDir.', 1)
+    if 'if dae.RouterCoreRecovered()' not in cmd_text:
+        cmd_text = re.sub(r'(func restoreRunningState\(\) (?:error|\(err error\)) \{)', r'\1\n\tif dae.RouterCoreRecovered() { return nil }', cmd_text, count=1)
+    cmd_file.write_text(cmd_text, encoding="utf-8", newline="\n")
+    generated["cmd/run.go"] = digest(cmd_text.encode())
     manifest.write_text(json.dumps(generated, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 

@@ -30,6 +30,9 @@ type RuntimeOverview struct {
 }
 
 func GetRuntimeOverview(windowSec int, maxPoints int) (*RuntimeOverview, error) {
+	if overview, handled, err := routerCoreOverview(windowSec, maxPoints); handled {
+		return overview, err
+	}
 	// The core records traffic per control plane. The deprecated global store
 	// does not receive live proxy traffic and must not be mixed with this instance.
 	snapshot := control.RuntimeStatsSnapshot{UpdatedAt: time.Now()}

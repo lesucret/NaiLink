@@ -10,7 +10,9 @@ export function useRouterMaintenance() {
     retry: false,
     refetchInterval: (query) =>
       !maintenanceAccessExpired(query.state.error) &&
-      (jobActive(query.state.data?.job) || query.state.data?.job?.code === 'apply_unconfirmed')
+      (jobActive(query.state.data?.job) ||
+        query.state.data?.cores?.phase === 'switching' ||
+        query.state.data?.job?.code === 'apply_unconfirmed')
         ? 2000
         : false,
   })
@@ -24,6 +26,10 @@ export function useRouterMaintenance() {
   return {
     query,
     mutation,
-    busy: mutation.isPending || jobActive(query.data?.job) || query.data?.job?.code === 'apply_unconfirmed',
+    busy:
+      mutation.isPending ||
+      jobActive(query.data?.job) ||
+      query.data?.cores?.phase === 'switching' ||
+      query.data?.job?.code === 'apply_unconfirmed',
   }
 }
