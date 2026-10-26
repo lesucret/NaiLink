@@ -42,6 +42,7 @@ function load(name, protocol = 'http:', page = 'dashboard') {
   context.community = vm.runInContext('(function(){' + fs.readFileSync(path.join(htdocs, 'community.js'), 'utf8') + '\n})()', context);
   context.access = vm.runInContext('(function(){' + fs.readFileSync(path.join(htdocs, 'access.js'), 'utf8') + '\n})()', context);
   context.logFormat = vm.runInContext('(function(){' + fs.readFileSync(path.join(htdocs, 'log-format.js'), 'utf8') + '\n})()', context);
+  context.maintenanceView = vm.runInContext('(function(){' + fs.readFileSync(path.join(htdocs, 'maintenance-view.js'), 'utf8') + '\n})()', context);
   const view = vm.runInContext('(function(){' + fs.readFileSync(path.join(htdocs, name + '.js'), 'utf8') + '\n})()', context);
   return { view, polls, calls, fetchCalls, setSession: value => {session = value;}, legacySession: () => {delete context.rpc.getSessionID;}, setResponse: value => {response = value;}, setNetworkFailure: () => {networkFailure = true;}, setAuthorized: value => { authorized = value; }, setResult: value => { result = value; }, setFailure: value => { rpcFailure = value; } };
 }
@@ -96,6 +97,15 @@ test('stopped services and expired sessions never embed a bypass URL', () => {
   for (const data of [{ running: false }, { running: true, authorized: false }]) {
     assert.equal(elements(view.render(data), 'iframe').length, 0);
   }
+});
+
+test('an active update survives a full-page refresh while the proxy is stopped', () => {
+  const module = load(panelModule);
+  const tree = module.view.render({running:false, maintenance:{success:true,job:{action:'update',state:'running',phase:'installing'}}});
+  assert.equal(elements(tree,'iframe').length,0);
+  assert.ok(tree.textContent.includes('正在更新 NaiLink'));
+  assert.equal(elements(tree,'button')[0].attrs.style,'min-height:44px');
+  assert.equal(module.polls.length,1);
 });
 
 test('dashboard authorizes using the LuCI session in a same-origin POST body', async () => {

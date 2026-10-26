@@ -1,11 +1,13 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
 # Native packages only. Never changes firmware, firewall or other proxy services.
+# The rollback downloader intentionally changes these globals in a subshell.
+# shellcheck disable=SC2030,SC2031
 set -eu
 umask 077
 
 REPOSITORY=slobys/NaiLink
-release=openwrt-v0.6.32
+release=openwrt-v0.6.33
 asset_dir=''
 mode=install
 action=install
@@ -17,6 +19,12 @@ explicit_action=0
 explicit_release=0
 latest_install=0
 update_only=0
+recoverable=0
+packages_changed=0
+rollback_ready=0
+backup_verified=0
+was_running=0
+was_autostart=0
 
 fail() { printf 'NaiLink: %s\n' "$*" >&2; exit 1; }
 usage() {
@@ -127,12 +135,17 @@ install_latest() {
 cleanup() {
 	result=$?
 	trap - EXIT HUP INT TERM
-	[ -z "$stage" ] || rm -rf "$stage"
 	if [ "$result" -ne 0 ] && [ "$stopped" = 1 ]; then
 		# Package maintainer scripts may have restarted the managed service.
 		if [ -x /etc/init.d/daed ]; then /etc/init.d/daed stop >/dev/null 2>&1 || :; fi
-		printf 'NaiLink: Operation did not complete. Service was stopped. Backup: %s\n' "${backup:-not created}" >&2
+		if [ "$recoverable" = 1 ] && restore_previous_install; then
+			printf 'NaiLink: Update failed; previous installation and service state restored. Backup: %s\n' "${backup:-not needed}" >&2
+		else
+			if [ -x /etc/init.d/daed ]; then /etc/init.d/daed stop >/dev/null 2>&1 || :; fi
+			printf 'NaiLink: Operation did not complete. Service was stopped. Backup: %s\n' "${backup:-not created}" >&2
+		fi
 	fi
+	[ -z "$stage" ] || rm -rf "$stage"
 	exit "$result"
 }
 trap cleanup EXIT
@@ -211,6 +224,54 @@ fi
 installed() {
 	if [ "$format" = apk ]; then apk info --exists "$1" >/dev/null 2>&1
 	else opkg status "$1" 2>/dev/null | grep -q '^Status:.* installed'; fi
+}
+
+restore_previous_install() {
+	# Never restart a partially replaced installation. Online updates stage the
+	# old native packages before stopping; manual installs retain their backup.
+	if [ "$packages_changed" = 1 ]; then
+		[ "$rollback_ready" = 1 ] && [ "$backup_verified" = 1 ] || return 1
+		printf 'NaiLink: Restoring verified previous native packages…\n' >&2
+		uci set daed.main.enabled=0 && uci commit daed || return 1
+		if [ "$format" = apk ]; then
+			apk add --allow-untrusted "$rollback_runtime" "$rollback_plugin" || return 1
+		else
+			opkg --force-downgrade install "$rollback_runtime" "$rollback_plugin" || return 1
+		fi
+		/etc/init.d/daed stop >/dev/null 2>&1 || return 1
+		waited=0
+		while pidof daed >/dev/null 2>&1; do
+			[ "$waited" -lt 35 ] || return 1
+			sleep 1; waited=$((waited + 1))
+		done
+		installed daed-router && installed luci-app-daed-router || return 1
+		[ "$(cat /usr/share/daed-router/version)" = "$previous_version" ] || return 1
+		# Preserve the failed attempt too, including any database/WAL written by
+		# package scripts. Refuse to overwrite it if this extra backup fails.
+		failed_backup="/root/daed-backups/failed-update-$(date -u +%Y%m%dT%H%M%SZ)-$$.tar.gz"
+		set -- etc/config/daed
+		[ ! -d /etc/daed ] || set -- "$@" etc/daed
+		tar -czf "$failed_backup" -C / "$@" && tar -tzf "$failed_backup" >/dev/null || return 1
+		chmod 600 "$failed_backup" || return 1
+		# Do not replay a WAL produced by the failed/new process over the old DB.
+		if tar -tzf "$backup" | grep -q '^etc/daed/wing.db$'; then
+			rm -f /etc/daed/wing.db-wal /etc/daed/wing.db-shm
+		fi
+		tar -xzf "$backup" -C / || return 1
+		/etc/init.d/rpcd reload >/dev/null 2>&1 || :
+	fi
+	if [ "$was_autostart" = 1 ]; then /etc/init.d/daed enable || return 1
+	else /etc/init.d/daed disable || return 1; fi
+	if [ "$was_running" = 1 ]; then
+		/etc/init.d/daed start || return 1
+		listen=$(/usr/libexec/daed/check --listen) || return 1
+		waited=0
+		until pidof daed >/dev/null 2>&1 && uclient-fetch -T 2 -O /dev/null "http://$listen/" >/dev/null 2>&1; do
+			[ "$waited" -lt 20 ] || return 1
+			sleep 1; waited=$((waited + 1))
+		done
+	fi
+	return 0
 }
 
 uninstall_daed() {
@@ -333,6 +394,35 @@ verify_record() {
 	fetch "$file"
 	printf '%s  %s\n' "$hash" "$stage/$file" | sha256sum -c - >/dev/null || fail "Checksum mismatch: $file"
 }
+prepare_rollback() {
+	for original in /etc/daed /etc/config/daed /etc/daed/wing.db /etc/daed/wing.db-wal /etc/daed/wing.db-shm; do
+		[ ! -L "$original" ] || fail 'Cannot prepare rollback for symlinked configuration/database. Existing service/data were not changed; back up the external data before a manual upgrade.'
+	done
+	previous_version=$(cat /usr/share/daed-router/version)
+	printf '%s\n' "$previous_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$' || fail 'Cannot prepare rollback: installed version is unknown.'
+	rollback_dir="$stage/rollback"
+	mkdir "$rollback_dir"
+	# Fetch in a subshell so the current manifest/release/filenames do not change.
+	(
+		stage=$rollback_dir
+		release="openwrt-v${previous_version%-*}"
+		if [ -n "$asset_dir" ]; then asset_dir="$asset_dir/rollback"; fi
+		fetch manifest.tsv
+		[ "$(head -n 1 "$stage/manifest.tsv")" = '# daed-openwrt-manifest-v1' ] || fail 'Invalid rollback manifest.'
+		for role in daed-router luci-app-daed-router; do
+			arch=$selected_arch
+			[ "$role" != luci-app-daed-router ] || arch=all
+			old=$(record "$format" "$arch" "$role") || fail 'Rollback package is unavailable for this firmware architecture.'
+			[ "$(printf '%s\n' "$old" | cut -f6)" = "${previous_version%-*}" ] || fail 'Rollback version mismatch.'
+			case "$(printf '%s\n' "$old" | cut -f4)" in *."$format") ;; *) fail 'Rollback package format mismatch.' ;; esac
+			verify_record "$old"
+			printf '%s\n' "$(printf '%s\n' "$old" | cut -f4)" > "$stage/$role.name"
+		done
+	) || fail 'Cannot prepare verified rollback packages. Existing service/data were not changed.'
+	rollback_runtime="$rollback_dir/$(cat "$rollback_dir/daed-router.name")"
+	rollback_plugin="$rollback_dir/$(cat "$rollback_dir/luci-app-daed-router.name")"
+	rollback_ready=1
+}
 support=$(record support all check) || fail 'Manifest has no unique compatibility checker.'
 [ "$(printf '%s\n' "$support" | cut -f4)" = daed-check ] || fail 'Unexpected checker filename.'
 verify_record "$support"
@@ -410,14 +500,16 @@ if [ "$format" = apk ]; then
 	apk add --simulate --allow-untrusted "$stage/$runtime_file" "$stage/$plugin_file" || fail 'Package preflight failed. NaiLink was not stopped or uninstalled. Check firmware feeds/dependencies; dry runs require cached indexes.'
 fi
 [ "$mode" != dry-run ] || { printf 'NaiLink: Dry run passed; no packages, configuration or services changed.\n'; exit 0; }
+[ "$update_only" != 1 ] || prepare_rollback
 if [ "$action" = reinstall ]; then uninstall_daed; stopped=1; fi
 was_running=0
 was_autostart=0
 if [ "$managed" = 1 ]; then
 	/etc/init.d/daed enabled >/dev/null 2>&1 && was_autostart=1
 	if pidof daed >/dev/null 2>&1; then was_running=1; fi
-	/etc/init.d/daed stop || fail 'Cannot stop existing service for a consistent backup.'
+	recoverable=1
 	stopped=1
+	/etc/init.d/daed stop || fail 'Cannot stop existing service for a consistent backup.'
 	waited=0
 	while pidof daed >/dev/null 2>&1; do
 		[ "$waited" -lt 35 ] || fail 'NaiLink is still running; database backup was not attempted.'
@@ -430,7 +522,10 @@ if [ "$managed" = 1 ]; then
 	[ ! -d /etc/daed ] || set -- "$@" etc/daed
 	tar -czf "$backup" -C / "$@" || fail 'Cannot back up existing data.'
 	chmod 600 "$backup"
+	tar -tzf "$backup" >/dev/null || fail 'Cannot verify existing data backup.'
+	backup_verified=1
 fi
+packages_changed=1
 if [ "$format" = apk ]; then
 	# Local release packages are unsigned; this flag is scoped to this transaction.
 	apk add --allow-untrusted "$stage/$runtime_file" "$stage/$plugin_file"

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -252,6 +253,15 @@ func TestMaintenanceGeodataAtomicActivationAndFailurePaths(t *testing.T) {
 				if err := switchGeodata(directory, target); err != nil {
 					return err
 				}
+				if mode != "apply_unconfirmed" {
+					if err := writeMaintenanceJSON(filepath.Join(directory, "activation.json"), maintenanceGeodataReceipt{target, "data-1", "applied"}); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					if err := writeMaintenanceJSON(filepath.Join(directory, "activation.json"), maintenanceGeodataReceipt{target, "data-1", "applying"}); err != nil {
+						t.Fatal(err)
+					}
+				}
 				if mode == "apply_unconfirmed" {
 					return errors.New("backend_unavailable")
 				}
@@ -344,5 +354,70 @@ func TestMaintenancePublishedGeodata(t *testing.T) {
 		if err = validateGeodata(filepath.Join(directory, name), name); err != nil {
 			t.Fatalf("upstream %s: %v", name, err)
 		}
+	}
+}
+
+func TestMaintenanceClockCorrectionAndGeodataReceipt(t *testing.T) {
+	m := maintenanceFixture(t)
+	job := maintenanceJob{ID: strings.Repeat("a", 24), Action: "check", State: "queued", Updated: m.now().Unix() + 3600}
+	writeMaintenanceJSON(filepath.Join(m.stateDir, "job.json"), job)
+	if got := m.status(); got.Job.Code != "interrupted" {
+		t.Fatal("future queue never recovered")
+	}
+	directory := filepath.Join(m.configDir, "geodata")
+	os.Mkdir(directory, 0700)
+	for _, batch := range []string{"data-1", "data-2"} {
+		os.Mkdir(filepath.Join(directory, batch), 0700)
+		writeMaintenanceJSON(filepath.Join(directory, batch, "version.json"), releaseInfo{batch, batch, 1})
+	}
+	os.Symlink("data-2", filepath.Join(directory, "current"))
+	job.Action, job.State, job.Code, job.Batch = "geodata", "error", "apply_unconfirmed", "data-2"
+	writeMaintenanceJSON(filepath.Join(m.stateDir, "job.json"), job)
+	receipt := maintenanceGeodataReceipt{"data-2", "data-1", "applying"}
+	writeMaintenanceJSON(filepath.Join(directory, "activation.json"), receipt)
+	got := m.status()
+	if got.Job.Code != "apply_unconfirmed" || got.Geodata.Version != "data-1" {
+		t.Fatal("unconfirmed batch shown as active")
+	}
+	if m.start("check").Code != "apply_unconfirmed" {
+		t.Fatal("in-flight activation overwritten")
+	}
+	receipt.State = "applied"
+	writeMaintenanceJSON(filepath.Join(directory, "activation.json"), receipt)
+	got = m.status()
+	if got.Job.State != "success" || got.Job.Code != "recovered" || got.Geodata.Version != "data-2" {
+		t.Fatal("lost success response did not recover")
+	}
+	job.State, job.Code = "error", "apply_unconfirmed"
+	writeMaintenanceJSON(filepath.Join(m.stateDir, "job.json"), job)
+	receipt.State = "rolled_back"
+	writeMaintenanceJSON(filepath.Join(directory, "activation.json"), receipt)
+	if got = m.status(); got.Job.Code != "apply_failed" {
+		t.Fatal("rollback was reported as success")
+	}
+}
+
+func TestMaintenanceCommandAllowsRecoveryTrapAndStopsChildren(t *testing.T) {
+	directory := t.TempDir()
+	script := filepath.Join(directory, "installer")
+	os.WriteFile(script, []byte("#!/bin/sh\ntrap 'echo restored > \"$1/recovered\"; exit 1' TERM\nsleep 60 &\necho $! > \"$1/child\"\nwait\n"), 0700)
+	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
+	defer cancel()
+	_, err := maintenanceCommand(ctx, "/bin/sh", script, directory)
+	if err == nil {
+		t.Fatal("interruption lost")
+	}
+	if _, err = os.Stat(filepath.Join(directory, "recovered")); err != nil {
+		t.Fatal("installer recovery trap was killed")
+	}
+	data, _ := os.ReadFile(filepath.Join(directory, "child"))
+	var pid int
+	fmt.Sscanf(string(data), "%d", &pid)
+	if pid <= 0 {
+		t.Fatal("missing child")
+	}
+	data, err = os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err == nil && !strings.Contains(string(data), "State:\tZ") && syscall.Kill(pid, 0) == nil {
+		t.Fatal("orphan installer child is still running")
 	}
 }

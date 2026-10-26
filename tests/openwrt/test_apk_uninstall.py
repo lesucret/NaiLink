@@ -35,6 +35,26 @@ class NativeAPKUninstallTests(unittest.TestCase):
         test_router.RouterTests.setUpClass()
         cls.apk = Path(location).resolve()
 
+    def test_verified_local_packages_can_restore_an_older_native_version(self):
+        case = test_router.RouterTests(); case.setUp()
+        try:
+            install_host_apk(case,self.apk)
+            paths = []
+            for version in ('0.1.0-r1','0.2.0-r1'):
+                payload = Path(case.temp.name)/('payload-'+version)
+                marker = payload/'usr/share/nailink-recovery-test'; marker.parent.mkdir(parents=True)
+                marker.write_text(version)
+                package = Path(case.temp.name)/(version+'.apk')
+                subprocess.run([str(self.apk),'mkpkg','--info','name:nailink-recovery-test','--info','version:'+version,'--info','arch:x86_64','--files',str(payload),'--output',str(package)],check=True,capture_output=True)
+                destination = '/fixtures/'+package.name
+                case.write(destination,package.read_bytes()); paths.append(destination)
+            for package in (paths[1],paths[0]):
+                result = case.run_router('apk','add','--initdb','--allow-untrusted',package)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertEqual((case.root/'usr/share/nailink-recovery-test').read_text(),'0.1.0-r1')
+        finally:
+            case.tearDown()
+
     def test_real_apk_uninstall_keeps_orphan_btf_and_backs_up_data(self):
         case = test_router.RouterTests()
         case.setUp()

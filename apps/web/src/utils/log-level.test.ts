@@ -16,4 +16,10 @@ describe('log severity', () => {
     expect(entries.map((entry) => entry.level)).toEqual(['error', 'warning', 'plain'])
     expect(splitLogLevels('')).toEqual([])
   })
+  it('keeps error color across multiline JSON payloads', () => {
+    const text = '[ERROR] failed\n{\n"detail": "failure"\n}\n{"payload":true}\n'
+    const entries = splitLogLevels(text)
+    expect(entries.every((entry) => entry.level === 'error')).toBe(true)
+    expect(entries.map((entry) => entry.text).join('')).toBe(text)
+  })
 })

@@ -28,6 +28,7 @@ export const maintenanceMessages: Record<string, string> = {
   checksum_failed: '文件校验失败，已停止更新。',
   invalid_installer: '安装脚本版本或格式异常，已停止更新。',
   install_failed: '安装未完成，节点和配置备份已保留，请查看运行日志并按安装文档恢复。',
+  update_rolled_back: '更新未完成，已恢复原安装及服务状态；节点和配置备份保留。请检查日志后再试。',
   install_missing: '现有插件已被移除，在线更新已停止，没有重新安装。',
   version_changed: '安装期间版本已发生变化，请重新检查更新。',
   unsupported: '当前固件、架构或内核未通过兼容性检查，未强制安装。',
@@ -39,7 +40,7 @@ export const maintenanceMessages: Record<string, string> = {
   configuration_modified: '当前有未应用配置，请先应用或恢复这些配置，再更新规则库。',
   apply_failed: '新规则库加载失败，已恢复旧版。',
   apply_unconfirmed: '规则库加载结果尚未确认，两份数据均已保留。请稍后查看状态或运行日志，勿重复更新。',
-  rollback_failed: '恢复旧版时遇到异常，请查看运行日志并重新应用配置。',
+  rollback_failed: '自动回退未完成，服务已停止，原配置备份保留。请按安装文档修复，避免卸载清除数据。',
   backend_unavailable: '无法读取或重新加载代理配置，请确认服务正常后重试。',
   unsafe_state: '维护目录状态异常，已停止操作以保护现有文件。',
   state_failed: '无法保存维护状态，请检查存储空间和文件权限。',
@@ -49,6 +50,11 @@ export const maintenanceMessages: Record<string, string> = {
 
 export function jobActive(job?: MaintenanceJob) {
   return job?.state === 'queued' || job?.state === 'running'
+}
+
+export class MaintenanceAccessError extends Error {}
+export function maintenanceAccessExpired(error: unknown) {
+  return error instanceof MaintenanceAccessError
 }
 export function newerVersion(next: string, current: string) {
   const a = next.split('.').map(Number)
@@ -70,13 +76,27 @@ async function maintenanceRPC(method: 'maintenance' | 'maintain', action?: strin
   }
   if (host === window || !host.L?.require) throw new Error('请从路由器后台进入维护功能。')
   const rpc = await host.L.require('rpc')
-  const result = await rpc.declare({
-    object: 'daed-router',
-    method,
-    params: method === 'maintain' ? ['action'] : [],
-    expect: {},
-    raise: true,
-  })(...(action ? [action] : []))
+  let result: MaintenanceStatus
+  try {
+    result = await rpc.declare({
+      object: 'daed-router',
+      method,
+      params: method === 'maintain' ? ['action'] : [],
+      expect: {},
+      raise: true,
+      reject: true,
+    })(...(action ? [action] : []))
+  } catch (error) {
+    const failure = error as { code?: number; name?: string; message?: string }
+    if (
+      failure?.code === 6 ||
+      failure?.name === 'SessionError' ||
+      (failure?.name === 'RPCError' &&
+        /\b(?:ubus code 6|error -32002|HTTP error (?:401|403))\b/.test(failure.message || ''))
+    )
+      throw new MaintenanceAccessError('LuCI 登录已失效或没有维护权限，请重新登录后台。')
+    throw new Error('维护接口暂时不可用，请稍后重试；持续失败时重新登录后台。')
+  }
   if (!result || typeof result.success !== 'boolean') throw new Error('维护接口不可用，请更新插件并重新登录后台。')
   if (!result.success) throw new Error(maintenanceMessages[result.code || ''] || maintenanceMessages.operation_failed)
   return result

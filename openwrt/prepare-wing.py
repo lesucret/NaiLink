@@ -46,8 +46,16 @@ def router_lifecycle(text):
         text = text.replace('Callback chan<- error', 'Callback chan<- error\n\tGeodata *RouterGeodataTransaction', 1)
     if 'routerSetGeodataRoot(externGeoDataDirs)' not in text:
         text = text.replace('defer close(GracefullyExit)', 'defer close(GracefullyExit)\n\trouterSetGeodataRoot(externGeoDataDirs)', 1)
+    if 'routerRecoverGeodata()' not in text:
+        text = text.replace('routerSetGeodataRoot(externGeoDataDirs)', 'routerSetGeodataRoot(externGeoDataDirs)\n\tif err := routerRecoverGeodata(); err != nil { return err }', 1)
     if 'routerBeginGeodata(newConf.Geodata)' not in text:
         text = text.replace('newConf.Callback <- nil', 'if newConf.Geodata != nil { _, err := routerBeginGeodata(newConf.Geodata); newConf.Callback <- err } else { newConf.Callback <- nil }', 1)
+    if 'routerCommitGeodata(newConf.Geodata)' not in text:
+        text = text.replace('_, err := routerBeginGeodata(newConf.Geodata); newConf.Callback <- err', '_, err := routerBeginGeodata(newConf.Geodata); if err == nil { err = routerCommitGeodata(newConf.Geodata) }; newConf.Callback <- err', 1)
+    if 'var pendingGeodata *RouterGeodataTransaction' not in text:
+        text = text.replace('var chCallback chan<- error', 'var chCallback chan<- error\n\tvar pendingGeodata *RouterGeodataTransaction', 1)
+        text = text.replace('chCallback = newReloadMsg.Callback', 'chCallback = newReloadMsg.Callback\n\t\t\tpendingGeodata = newReloadMsg.Geodata', 1)
+        text = text.replace('chCallback <- errReload', 'if errReload == nil && pendingGeodata != nil { errReload = routerCommitGeodata(pendingGeodata) }; pendingGeodata = nil\n\t\t\t\tchCallback <- errReload', 1)
     if 'routerBeginGeodata(newReloadMsg.Geodata)' not in text:
         text = text.replace('newConf := newReloadMsg.Config', '''newConf := newReloadMsg.Config
             var rollbackGeodata func() error

@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
@@ -29,6 +30,12 @@ import (
 var releaseTag = regexp.MustCompile(`^openwrt-v([0-9]+\.[0-9]+\.[0-9]+)$`)
 var dataTag = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$`)
 
+func queuedMaintenanceStale(updated, now int64) bool {
+	// OpenWrt can correct its clock after boot. A future timestamp must not
+	// leave an abandoned queue entry busy forever.
+	return now-updated > 30 || updated-now > 60
+}
+
 type maintenanceJob struct {
 	ID      string `json:"id"`
 	Action  string `json:"action"`
@@ -36,6 +43,7 @@ type maintenanceJob struct {
 	Phase   string `json:"phase"`
 	Code    string `json:"code,omitempty"`
 	Target  string `json:"target,omitempty"`
+	Batch   string `json:"batch,omitempty"`
 	Started int64  `json:"started"`
 	Updated int64  `json:"updated"`
 }
@@ -43,6 +51,11 @@ type releaseInfo struct {
 	Version string `json:"version"`
 	Tag     string `json:"tag"`
 	Checked int64  `json:"checked"`
+}
+type maintenanceGeodataReceipt struct {
+	Target   string `json:"target"`
+	Previous string `json:"previous"`
+	State    string `json:"state"`
 }
 type maintenanceStatus struct {
 	Success bool            `json:"success"`
@@ -188,18 +201,37 @@ func (m *maintenanceManager) status() maintenanceStatus {
 		s.Latest = &latest
 	}
 	var geo releaseInfo
-	if readMaintenanceJSON(filepath.Join(m.configDir, "geodata", "current", "version.json"), &geo) == nil {
+	var receipt maintenanceGeodataReceipt
+	_ = readMaintenanceJSON(filepath.Join(m.configDir, "geodata", "activation.json"), &receipt)
+	geoBatch := "current"
+	if receipt.State == "applying" {
+		geoBatch = receipt.Previous
+	}
+	if geoBatch != "" && readMaintenanceJSON(filepath.Join(m.configDir, "geodata", geoBatch, "version.json"), &geo) == nil {
 		s.Geodata = &geo
 	}
 	var job maintenanceJob
 	if readMaintenanceJSON(filepath.Join(m.stateDir, "job.json"), &job) == nil {
 		// An exited/killed worker must never leave an endless spinner. A freshly
 		// queued task has a short grace period while procd starts the worker.
-		if job.State == "running" || job.State == "queued" && m.now().Unix()-job.Updated > 30 {
+		if job.State == "running" || job.State == "queued" && queuedMaintenanceStale(job.Updated, m.now().Unix()) || job.Code == "apply_unconfirmed" {
 			if lock, err := maintenanceLock(m.lockFile, false); err == nil {
 				var fresh maintenanceJob
-				if readMaintenanceJSON(filepath.Join(m.stateDir, "job.json"), &fresh) == nil && fresh.ID == job.ID && (fresh.State == "running" || fresh.State == "queued" && m.now().Unix()-fresh.Updated > 30) {
+				if readMaintenanceJSON(filepath.Join(m.stateDir, "job.json"), &fresh) == nil && fresh.ID == job.ID && (fresh.State == "running" || fresh.State == "queued" && queuedMaintenanceStale(fresh.Updated, m.now().Unix()) || fresh.Code == "apply_unconfirmed") {
 					job.State, job.Code, job.Phase = "error", "interrupted", "finished"
+					if job.Action == "geodata" && job.Batch != "" && job.Batch == receipt.Target {
+						current, _ := os.Readlink(filepath.Join(m.configDir, "geodata", "current"))
+						switch receipt.State {
+						case "applied":
+							if current == job.Batch {
+								job.State, job.Code = "success", "recovered"
+							}
+						case "rolled_back":
+							job.Code = "apply_failed"
+						case "applying":
+							job.Code = "apply_unconfirmed"
+						}
+					}
 					job.Updated = m.now().Unix()
 					_ = writeMaintenanceJSON(filepath.Join(m.stateDir, "job.json"), job)
 				}
@@ -228,7 +260,11 @@ func (m *maintenanceManager) start(action string) maintenanceStatus {
 		return maintenanceStatus{Code: "unsafe_state"}
 	}
 	var previous maintenanceJob
-	if readMaintenanceJSON(filepath.Join(m.stateDir, "job.json"), &previous) == nil && previous.State == "queued" && m.now().Unix()-previous.Updated < 30 {
+	var pending maintenanceGeodataReceipt
+	if readMaintenanceJSON(filepath.Join(m.configDir, "geodata", "activation.json"), &pending) == nil && pending.State == "applying" {
+		return maintenanceStatus{Code: "apply_unconfirmed"}
+	}
+	if readMaintenanceJSON(filepath.Join(m.stateDir, "job.json"), &previous) == nil && previous.State == "queued" && !queuedMaintenanceStale(previous.Updated, m.now().Unix()) {
 		return maintenanceStatus{Code: "busy"}
 	}
 	job := maintenanceJob{Action: action, State: "queued", Phase: "queued", Started: m.now().Unix()}
@@ -296,7 +332,7 @@ func (m *maintenanceManager) worker(ctx context.Context, expectedID string) erro
 func maintenanceCode(err error) string {
 	// Only stable codes cross the UI boundary; network/installer errors may
 	// contain full URLs, query strings or configuration paths.
-	for _, code := range []string{"busy", "download_failed", "invalid_release", "checksum_failed", "invalid_installer", "install_failed", "install_missing", "version_changed", "unsupported", "no_space", "backup_failed", "service_not_ready", "custom_geodata", "invalid_geodata", "apply_failed", "apply_unconfirmed", "rollback_failed", "configuration_modified", "backend_unavailable", "unsafe_state", "state_failed"} {
+	for _, code := range []string{"busy", "download_failed", "invalid_release", "checksum_failed", "invalid_installer", "install_failed", "install_missing", "version_changed", "unsupported", "no_space", "backup_failed", "service_not_ready", "custom_geodata", "invalid_geodata", "apply_failed", "apply_unconfirmed", "rollback_failed", "configuration_modified", "backend_unavailable", "unsafe_state", "state_failed", "update_rolled_back", "interrupted"} {
 		if err.Error() == code {
 			return code
 		}
@@ -436,10 +472,19 @@ func (m *maintenanceManager) installUpdate(ctx context.Context, job *maintenance
 	output, err := m.run(ctx, "/bin/sh", installer, "--install", "--update-only", "--release", job.Target)
 	if err != nil {
 		text := string(output)
+		if strings.Contains(text, "previous installation and service state restored") {
+			return errors.New("update_rolled_back")
+		}
+		if strings.Contains(text, "Restoring verified previous native packages") {
+			return errors.New("rollback_failed")
+		}
 		for _, item := range []struct{ token, code string }{{"Another NaiLink", "busy"}, {"Existing managed install required", "install_missing"}, {"Online update refused", "version_changed"}, {"Unsupported CPU", "unsupported"}, {"Compatibility check failed", "unsupported"}, {"Supported:", "unsupported"}, {"space", "no_space"}, {"Cannot back up", "backup_failed"}, {"Checksum mismatch", "checksum_failed"}, {"Cannot download", "download_failed"}, {"Management HTTP did not become ready", "service_not_ready"}} {
 			if strings.Contains(text, item.token) {
 				return errors.New(item.code)
 			}
+		}
+		if ctx.Err() != nil {
+			return errors.New("interrupted")
 		}
 		return errors.New("install_failed")
 	}
@@ -531,10 +576,18 @@ func maintenanceCommand(ctx context.Context, args ...string) ([]byte, error) {
 		return nil, errors.New("empty_command")
 	}
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
+	// Give the installer trap time to restore its verified backup/packages.
+	cmd.WaitDelay = 90 * time.Second
 	var out boundedOutput
 	cmd.Stdout = &out
 	cmd.Stderr = &out
-	err := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return out.data, err
+	}
+	defer syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	err := cmd.Wait()
 	return out.data, err
 }
 func (m *maintenanceManager) graphQL(ctx context.Context, query string, value any) error {
@@ -597,7 +650,9 @@ func maintenanceCLI(command, configDir, jobID string) {
 		if !regexp.MustCompile(`^[a-f0-9]{24}$`).MatchString(jobID) {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+		signalContext, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+		defer stop()
+		ctx, cancel := context.WithTimeout(signalContext, 20*time.Minute)
 		defer cancel()
 		if err := manager.worker(ctx, jobID); err != nil {
 			fmt.Fprintln(os.Stderr, "NaiLink maintenance worker stopped")

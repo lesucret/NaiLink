@@ -100,3 +100,48 @@ func TestRouterGeodataInitialRollbackAndCancellation(t *testing.T) {
 		t.Fatal("late callback blocked")
 	}
 }
+
+func TestRouterGeodataCrashRecoveryAndCommittedBatch(t *testing.T) {
+	for _, previous := range []string{"", "data-1"} {
+		t.Run("previous-"+previous, func(t *testing.T) {
+			config := t.TempDir()
+			root := filepath.Join(config, "geodata")
+			os.Mkdir(root, 0700)
+			routerSetGeodataRoot([]string{config})
+			for _, batch := range []string{"data-1", "data-2"} {
+				os.Mkdir(filepath.Join(root, batch), 0700)
+				for _, asset := range []string{"geoip.dat", "geosite.dat"} {
+					os.WriteFile(filepath.Join(root, batch, asset), []byte(batch), 0600)
+				}
+			}
+			if previous != "" {
+				os.Symlink(previous, filepath.Join(root, "current"))
+			}
+			tx := &RouterGeodataTransaction{"data-2", previous}
+			if _, err := routerBeginGeodata(tx); err != nil {
+				t.Fatal(err)
+			}
+			// Model a process exit before readiness/commit, then the next Run.
+			if err := routerRecoverGeodata(); err != nil {
+				t.Fatal(err)
+			}
+			current, _ := os.Readlink(filepath.Join(root, "current"))
+			if current != previous {
+				t.Fatal("unconfirmed batch survived restart")
+			}
+			if _, err := routerBeginGeodata(tx); err != nil {
+				t.Fatal(err)
+			}
+			if err := routerCommitGeodata(tx); err != nil {
+				t.Fatal(err)
+			}
+			if err := routerRecoverGeodata(); err != nil {
+				t.Fatal(err)
+			}
+			current, _ = os.Readlink(filepath.Join(root, "current"))
+			if current != "data-2" {
+				t.Fatal("committed batch was reverted")
+			}
+		})
+	}
+}

@@ -106,6 +106,10 @@ fallback: proxy</code></pre>
 </ol>
 <h2 id="geodata">更新 GeoIP / GeoSite</h2>
 <p>
+  0.6.33
+  起，只有新控制面就绪才确认新批次。加载途中进程退出，下次启动会恢复旧批次；响应丢失时根据确认记录重新判断结果。未确认期间请等待状态恢复，不重复启动维护任务，节点与配置保持原样。
+</p>
+<p>
   安装时提供固件的 <code>v2ray-geoip</code> / <code>v2ray-geosite</code> 依赖。0.6.32 起，在<strong
     >高级设置 → GeoIP / GeoSite 规则库</strong
   >点击“一键更新规则库”，可下载 Loyalsoldier/v2ray-rules-dat 的最新发布数据。

@@ -21,9 +21,10 @@ return baseclass.extend({
       var value = header && header[1].toLowerCase()
       if (line.charAt(0) === '{') {
         try {
-          value = JSON.parse(line).level.toLowerCase()
+          var level = JSON.parse(line).level
+          if (typeof level === 'string') value = level.toLowerCase()
         } catch (_) {
-          value = 'plain'
+          // A multiline JSON payload can continue an error record.
         }
       }
       if (value)

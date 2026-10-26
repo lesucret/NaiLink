@@ -250,11 +250,18 @@ def main():
                     answer["requests"] = state["proxy_requests"]
                     answer["address"] = "127.0.0.1:" + str(socks.server_address[1])
                 elif action == "maintenance" and maintenance:
+                    if "next" in request:
+                        if not re.fullmatch(r"0\.6\.(99|100|101)",request['next']): raise ValueError('Invalid future fixture version')
+                        maintenance.state['next'] = request['next']
                     if "fail" in request:
-                        if request["fail"] not in ("", "download", "checksum", "invalid_geodata"): raise ValueError("Invalid fixture failure mode")
+                        if request["fail"] not in ("", "download", "checksum", "invalid_geodata", "install"): raise ValueError("Invalid fixture failure mode")
                         maintenance.state["fail"] = request["fail"]
                     if request.get("bump"):
                         maintenance.state["geo"] = str(int(maintenance.state["geo"]) + 1)
+                    if "hold" in request:
+                        hold = root / "tmp/fixture-update-hold"
+                        if request['hold']: hold.touch()
+                        else: hold.unlink(missing_ok=True)
                     if "custom" in request:
                         custom = root / "etc/daed/geoip.dat"
                         if request["custom"]:
@@ -265,6 +272,24 @@ def main():
                     pointer = root / "etc/daed/geodata/current"
                     answer["current"] = os.readlink(pointer) if pointer.is_symlink() else ""
                     answer["requests"] = maintenance.state["requests"]
+                elif action == "geodata_crash" and maintenance:
+                    directory = root/'etc/daed/geodata'
+                    pointer = directory/'current'
+                    previous = os.readlink(pointer)
+                    candidate = 'data-999999999'
+                    shutil.copytree(directory/previous,directory/candidate)
+                    receipt = directory/'activation.json'
+                    receipt.write_text(json.dumps({'target':candidate,'previous':previous,'state':'applying'}))
+                    receipt.chmod(0o600)
+                    pointer.unlink(); pointer.symlink_to(candidate)
+                    job_file = root/'var/run/daed-maintenance/job.json'
+                    job = json.loads(job_file.read_text()); job.update(id='f'*24,state='running',code='',batch=candidate)
+                    job_file.write_text(json.dumps(job)); job_file.chmod(0o600)
+                    # Crash after pointer activation but before readiness/ack.
+                    daemon.kill(); daemon.wait(timeout=5); daemon = start_daemon(args.runtime)
+                    answer.update(current=os.readlink(pointer),previous=previous,receipt=json.loads(receipt.read_text()),unchanged=snapshot()==baseline)
+                elif action == 'stop_maintenance' and maintenance:
+                    subprocess.run(['chroot',str(root),'/usr/libexec/daed/nailink-maintenance','stop'],check=True,timeout=10)
                 result.write_text(json.dumps(answer))
             time.sleep(0.1)
     finally:

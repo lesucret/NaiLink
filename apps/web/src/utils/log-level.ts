@@ -10,9 +10,10 @@ export function splitLogLevels(text: string): { text: string; level: LogLevel }[
     let value = header?.[1]?.toLowerCase()
     if (line.startsWith('{')) {
       try {
-        value = JSON.parse(line).level?.toLowerCase() || 'plain'
+        const level = JSON.parse(line).level
+        if (typeof level === 'string') value = level.toLowerCase()
       } catch {
-        value = 'plain'
+        // A multiline payload beginning with "{" is still a continuation.
       }
     }
     if (value)

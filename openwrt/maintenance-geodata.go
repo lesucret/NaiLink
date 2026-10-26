@@ -215,6 +215,11 @@ func (m *maintenanceManager) updateGeodata(ctx context.Context, job *maintenance
 	// The control-plane actor activates this pair while reusing its current
 	// configuration. It restores the old pointer before a failed load falls
 	// back; calling the ordinary run mutation here would apply pending edits.
+	for _, name := range []string{"geoip.dat", "geosite.dat"} {
+		if _, e := os.Lstat(filepath.Join(m.configDir, name)); e == nil || !os.IsNotExist(e) {
+			return errors.New("custom_geodata")
+		}
+	}
 	if err = m.graph(ctx, `query{healthCheck}`, &state); err != nil {
 		return err
 	}
@@ -222,6 +227,10 @@ func (m *maintenanceManager) updateGeodata(ctx context.Context, job *maintenance
 		return errors.New("state_failed")
 	}
 	target := filepath.Base(stage)
+	job.Batch, job.Target = target, release.Tag
+	if err = m.save(job, "applying"); err != nil {
+		return errors.New("state_failed")
+	}
 	var result map[string]any
 	err = m.graph(ctx, `mutation{activateGeodata(target:`+strconv.Quote(target)+`,previous:`+strconv.Quote(previous)+`)}`, &result)
 	if err != nil {
@@ -236,6 +245,11 @@ func (m *maintenanceManager) updateGeodata(ctx context.Context, job *maintenance
 	}
 	current, _ := os.Readlink(filepath.Join(directory, "current"))
 	if current != target {
+		installed = true
+		return errors.New("apply_unconfirmed")
+	}
+	var receipt maintenanceGeodataReceipt
+	if readMaintenanceJSON(filepath.Join(directory, "activation.json"), &receipt) != nil || receipt.Target != target || receipt.State != "applied" {
 		installed = true
 		return errors.New("apply_unconfirmed")
 	}

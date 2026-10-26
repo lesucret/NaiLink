@@ -29,7 +29,8 @@ class MaintenanceFixture:
                     return
                 version = outer.state["next"]
                 tag = "openwrt-v" + version
-                installer = ("#!/bin/sh\nrelease=" + tag + "\nset -e\n. /lib/functions.sh\nPKG_UPGRADE=1 pkgname=daed-router default_prerm\nsleep 3\nPKG_UPGRADE=1 pkgname=daed-router default_postinst\nprintf '" + version + "-1\\n' > /usr/share/daed-router/version\n").encode()
+                failure = "echo 'NaiLink: Update failed; previous installation and service state restored.' >&2\nexit 23\n" if outer.state['fail'] == 'install' else ''
+                installer = ("#!/bin/sh\nrelease=" + tag + "\nset -e\n. /lib/functions.sh\nPKG_UPGRADE=1 pkgname=daed-router default_prerm\nwhile [ -e /tmp/fixture-update-hold ]; do sleep 1; done\nsleep 3\n" + failure + "PKG_UPGRADE=1 pkgname=daed-router default_postinst\nprintf '" + version + "-1\\n' > /usr/share/daed-router/version\n").encode()
                 assets = {"install.sh": installer, "SHA256SUMS": (hashlib.sha256(installer).hexdigest() + "  install.sh\n").encode()}
                 for name in ("geoip.dat", "geosite.dat"):
                     data = (fixture / name).read_bytes()

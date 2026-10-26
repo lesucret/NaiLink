@@ -37,13 +37,30 @@ function MaintenanceProgress({ type }: { type: 'update' | 'geodata' }) {
                 : '插件更新完成'
             : phases[job.phase] || '维护任务正在执行'}
       </p>
-      {query.isError && <p className="mt-1 text-xs">服务更新中或连接暂时中断，正在重新读取后台状态。</p>}
       {job.state === 'success' && job.action === 'update' && (
         <Button size="sm" className="mt-3 min-h-11" onClick={() => window.parent.location.reload()}>
           重新加载新版本
         </Button>
       )}
       {mutation.isError && <p className="mt-1">{mutation.error.message}</p>}
+    </div>
+  )
+}
+
+function MaintenanceConnection() {
+  const { query } = useRouterMaintenance()
+  if (!query.isError) return null
+  return (
+    <div role="alert" className="mt-3 rounded-lg border border-destructive/30 p-3 text-sm text-destructive">
+      <p>{query.error.message}</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Button variant="outline" className="min-h-11" onClick={() => query.refetch()}>
+          重新读取状态
+        </Button>
+        <Button variant="outline" className="min-h-11" onClick={() => window.parent.location.reload()}>
+          重新加载后台
+        </Button>
+      </div>
     </div>
   )
 }
@@ -60,7 +77,7 @@ export function RouterVersion() {
     loadedVersion.current ??= data?.current
     const justUpdated =
       data?.job?.action === 'update' && data.job.state === 'success' && data.current !== loadedVersion.current
-    if (!busy && !justUpdated) mutation.mutate('check')
+    if (!busy && !justUpdated && !latest && data?.job?.state !== 'error') mutation.mutate('check')
   }
   return (
     <>
@@ -89,14 +106,10 @@ export function RouterVersion() {
             <dd>{latest ? `v${latest.version}` : '尚未检查'}</dd>
           </dl>
           <MaintenanceProgress type="update" />
+          <MaintenanceConnection />
           {mutation.isError && (
             <p role="alert" className="text-sm text-destructive">
               {mutation.error.message}
-            </p>
-          )}
-          {query.isError && !busy && (
-            <p role="alert" className="text-sm text-destructive">
-              维护状态读取失败，请重新登录后台或重试。
             </p>
           )}
           {!busy && query.data?.job?.state !== 'error' && latest && !available && (
@@ -106,7 +119,11 @@ export function RouterVersion() {
             <Button variant="outline" className="min-h-11" disabled={busy} onClick={() => mutation.mutate('check')}>
               检查更新
             </Button>
-            <Button className="min-h-11" disabled={busy || !available} onClick={() => mutation.mutate('update')}>
+            <Button
+              className="min-h-11"
+              disabled={busy || query.isError || !available}
+              onClick={() => mutation.mutate('update')}
+            >
               <Download aria-hidden="true" />
               更新到 {latest?.version || '最新版本'}
             </Button>
@@ -139,6 +156,7 @@ export function RouterGeodata() {
       </div>
       <div className="mt-3">
         <MaintenanceProgress type="geodata" />
+        <MaintenanceConnection />
       </div>
       {mutation.isError && (
         <p role="alert" className="mt-3 text-sm text-destructive">

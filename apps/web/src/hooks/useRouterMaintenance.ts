@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { jobActive, readMaintenance, startMaintenance } from '~/utils/router-maintenance'
+import { jobActive, maintenanceAccessExpired, readMaintenance, startMaintenance } from '~/utils/router-maintenance'
 
 export function useRouterMaintenance() {
   const client = useQueryClient()
@@ -8,7 +8,11 @@ export function useRouterMaintenance() {
     queryFn: readMaintenance,
     staleTime: 30000,
     retry: false,
-    refetchInterval: (query) => (jobActive(query.state.data?.job) ? 2000 : false),
+    refetchInterval: (query) =>
+      !maintenanceAccessExpired(query.state.error) &&
+      (jobActive(query.state.data?.job) || query.state.data?.job?.code === 'apply_unconfirmed')
+        ? 2000
+        : false,
   })
   const mutation = useMutation({
     mutationFn: startMaintenance,
@@ -17,5 +21,9 @@ export function useRouterMaintenance() {
       client.invalidateQueries({ queryKey: ['router-maintenance'] })
     },
   })
-  return { query, mutation, busy: mutation.isPending || jobActive(query.data?.job) }
+  return {
+    query,
+    mutation,
+    busy: mutation.isPending || jobActive(query.data?.job) || query.data?.job?.code === 'apply_unconfirmed',
+  }
 }
