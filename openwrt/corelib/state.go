@@ -12,15 +12,17 @@ import (
 	"path/filepath"
 )
 
-const SingBoxVersion = "1.14.3"
+const SingBoxVersion = "1.14.3-nailink.1"
+const SingBoxRelease = "openwrt-v0.6.35"
+const AdapterRevision = 3
 const BinaryPath = "/usr/libexec/daed/cores/sing-box"
 const TunName = "nailink0"
 
 type Release struct{ CPU, Archive, SHA256 string }
 
 var Releases = map[string]Release{
-	"amd64": {"x86_64", "sing-box_1.14.3_openwrt_x86_64.ipk", "c7b2945a72cb4836084a9bc1f3930ec11094c7362fd179c93fcaf401bfac26fa"},
-	"arm64": {"arm64", "sing-box_1.14.3_openwrt_aarch64_generic.ipk", "fb7d65d085c42a49b705bd38d639062a0c2f1cca2fb1c1dc2d41277ad840c4c6"},
+	"amd64": {"x86_64", "nailink-sing-box-1.14.3-nailink.1-x86_64.tar.gz", "084a4e845cc1c470dfb3dbdbb41dfbf5723decaff707d22c9486455fe6eba77f"},
+	"arm64": {"arm64", "nailink-sing-box-1.14.3-nailink.1-arm64.tar.gz", "ea0f739684b9418304f2cff773ff1a326d4a926601c2c75af44137b863064fb8"},
 }
 
 type State struct {

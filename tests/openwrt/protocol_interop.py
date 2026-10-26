@@ -6,12 +6,14 @@ Run prepare-wing.py first. No provider credentials or router access are used.
 """
 import argparse
 import base64
+import contextlib
 import http.server
 import json
 import os
 from pathlib import Path
 import socket
 import socketserver
+import ssl
 import struct
 import subprocess
 import tempfile
@@ -72,7 +74,7 @@ def run(args):
 
 
 def run_fixture(args, http_port, udp_port):
-    with tempfile.TemporaryDirectory(prefix="daed-protocol-") as temp:
+    with tempfile.TemporaryDirectory(prefix="daed-protocol-") as temp, contextlib.ExitStack() as cleanup:
         work = Path(temp)
         subprocess.run([
             "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(work / "key.pem"),
@@ -86,7 +88,29 @@ def run_fixture(args, http_port, udp_port):
             "-out", str(work / "vless-cert.pem"), "-subj", "/CN=vless.fixture.test", "-addext", "subjectAltName=DNS:vless.fixture.test", "-days", "1",
         ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         vless_tls = {"enabled": True, "certificate_path": str(work / "vless-cert.pem"), "key_path": str(work / "vless-key.pem")}
+        cover = http.server.ThreadingHTTPServer(('127.0.0.1', 0), HTTP)
+        cover_tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        cover_tls.minimum_version = ssl.TLSVersion.TLSv1_3
+        cover_tls.load_cert_chain(work / 'vless-cert.pem', work / 'vless-key.pem')
+        cover_tls.set_alpn_protocols(['h2', 'http/1.1'])
+        cover.socket = cover_tls.wrap_socket(cover.socket, server_side=True)
+        threading.Thread(target=cover.serve_forever, daemon=True).start()
+        cleanup.callback(cover.server_close)
+        cleanup.callback(cover.shutdown)
+        pair = subprocess.check_output([str(args.sing_box), 'generate', 'reality-keypair'], text=True)
+        reality_keys = dict(line.split(': ', 1) for line in pair.strip().splitlines())
         inbounds, cases = [], []
+        reality_port = port()
+        reality_uuid = '00000000-0000-4000-8000-000000000002'
+        inbounds.append({'type': 'vless', 'tag': 'reality-vision', 'listen': '127.0.0.1', 'listen_port': reality_port,
+                         'users': [{'uuid': reality_uuid, 'flow': 'xtls-rprx-vision'}],
+                         'tls': {'enabled': True, 'server_name': 'vless.fixture.test', 'reality': {'enabled': True,
+                             'handshake': {'server': '127.0.0.1', 'server_port': cover.server_port},
+                             'private_key': reality_keys['PrivateKey'], 'short_id': ['abcd']}}})
+        reality_link = (f'vless://{reality_uuid}@127.0.0.1:{reality_port}?security=reality&sni=vless.fixture.test'
+                        f'&pbk={reality_keys["PublicKey"]}&sid=abcd&fp=chrome&flow=xtls-rprx-vision&headerType=none&spx=%2F')
+        cases.append({'Name': 'vless-reality-vision', 'Link': reality_link})
+        cases.append({'Name': 'vless-reality-reject-wrong-short-id', 'Link': reality_link.replace('sid=abcd', 'sid=ffff'), 'Failure': 'unreachable'})
         for method in ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"]:
             number = port()
             password = "fixture@pass:2026"
@@ -114,6 +138,8 @@ def run_fixture(args, http_port, udp_port):
                     if transport == 'ws':
                         link += '&path=%2Ffixture'
                 cases.append({'Name': kind + '-tls-' + transport, 'Link': link})
+                if kind == 'trojan' and transport == 'tcp':
+                    cases.append({'Name': 'trojan-exporter-udp-enabled', 'Link': link + '&udp=1'})
         number = port(True)
         inbounds.append({'type': 'tuic', 'tag': 'tuic', 'listen': '127.0.0.1', 'listen_port': number,
                          'users': [{'uuid': uuid, 'password': 'fixture@pass:2026'}], 'congestion_control': 'cubic',
@@ -131,6 +157,8 @@ def run_fixture(args, http_port, udp_port):
                 inbound["transport"] = {"type": "grpc", "service_name": "fixture"}
             inbounds.append(inbound)
             link = f"vless://{uuid}@127.0.0.1:{number}?security=tls&sni=vless.fixture.test&type={transport}"
+            if transport == 'tcp':
+                link += '&headerType=none'
             if transport == 'ws':
                 link += '&path=%2Ffixture'
             elif transport == 'grpc':

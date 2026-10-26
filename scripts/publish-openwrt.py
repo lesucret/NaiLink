@@ -36,6 +36,7 @@ def validate_assets(directory, version, sha):
             raise ValueError("Malformed or duplicate checksum entry")
         assets[match[2]] = match[1]
     required = {"install.sh", "manifest.tsv", "SOURCE_COMMIT.txt", "SOURCE_SUBMODULES.txt", "daed-openwrt-source.tar.gz"}
+    required |= {"nailink-sing-box-1.14.3-nailink.1-" + suffix + ".tar.gz" for suffix in ("x86_64", "arm64", "source")}
     if not required <= assets.keys():
         raise ValueError("Missing installer, manifest or corresponding source")
     if {p.name for p in directory.iterdir()} != assets.keys() | {"SHA256SUMS"}:

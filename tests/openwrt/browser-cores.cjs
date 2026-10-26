@@ -139,7 +139,7 @@ async function waitText(locator, pattern) {
       realLuCI: true,
       realRPC: true,
       realProcd: true,
-      officialStaticInstall: true,
+      pinnedCompatibilityCoreInstall: true,
       downloadFailureRetry: true,
       daeSingboxDae: true,
       lateFailureRollback: true,

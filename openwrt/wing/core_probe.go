@@ -188,6 +188,9 @@ var routerCoreProbeSlots = make(chan struct{}, 2)
 
 func routerProbeConfiguration(links []string, global daeConfig.Global) (*daeConfig.Config, map[int]string, []RouterCoreProbe, error) {
 	conf := &daeConfig.Config{Global: global, Routing: daeConfig.Routing{Fallback: "direct"}}
+	// Manual tests deliberately pin the configured check IP. Domain dialing is
+	// for transparent user traffic, not a replacement for the test's fixed target.
+	conf.Global.DialMode = "ip"
 	manager := currentRouterCoreManager()
 	if manager == nil {
 		return nil, nil, nil, errors.New("core_not_ready")

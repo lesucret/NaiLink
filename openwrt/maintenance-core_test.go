@@ -105,14 +105,17 @@ func TestCoreDownloadFailurePreservesInstallAndData(t *testing.T) {
 		t.Fatal("download staging leaked")
 	}
 }
-func TestCoreOfficialArchiveInstall(t *testing.T) {
+func TestCorePinnedArchiveInstall(t *testing.T) {
 	archive := os.Getenv("DAED_TEST_SINGBOX_ARCHIVE")
 	if archive == "" {
-		t.Skip("provide pinned official archive for native install test")
+		t.Skip("provide pinned compatibility archive for native install test")
 	}
 	m := maintenanceFixture(t)
 	m.coreBinary = filepath.Join(t.TempDir(), "core", "sing-box")
-	m.fetch = func(_ context.Context, _, dest string, _ int64) error {
+	m.fetch = func(_ context.Context, address, dest string, _ int64) error {
+		if address != "https://github.com/slobys/NaiLink/releases/download/"+routercore.SingBoxRelease+"/"+routercore.Releases["amd64"].Archive {
+			t.Fatal("unexpected core origin", address)
+		}
 		in, err := os.Open(archive)
 		if err != nil {
 			return err

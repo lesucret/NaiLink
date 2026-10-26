@@ -70,3 +70,46 @@ func TestNodeRefusesUnknownOptionsAndUnsupportedTransports(t *testing.T) {
 		}
 	}
 }
+
+func TestExporterCompatibilityPreservesSecurityAndUDP(t *testing.T) {
+	var warnings []string
+	link := "vless://00000000-0000-4000-8000-000000000001@example.test:443?security=reality&pbk=fixture&sid=abcd&fp=chrome&flow=xtls-rprx-vision&type=tcp&headerType=none&spx=%2Ffixture-crawl"
+	out, err := Node(link, "fixture", NodeOptions{Warn: func(s string) { warnings = append(warnings, s) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out["flow"] != "xtls-rprx-vision" || out["tls"].(Object)["reality"].(Object)["public_key"] != "fixture" || len(warnings) != 1 || !strings.Contains(warnings[0], "spx") {
+		t.Fatal(out, warnings)
+	}
+	for _, flag := range []string{"0", "false", "1", "true"} {
+		out, err = Node("trojan://fixture@example.test:443?peer=cert.test&sni=cert.test&allowInsecure=1&udp="+flag, "fixture", NodeOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (flag == "0" || flag == "false") && out["network"] != "tcp" {
+			t.Fatal(out)
+		}
+		if (flag == "1" || flag == "true") && out["network"] != nil {
+			t.Fatal("disabled native UDP", out)
+		}
+		if out["tls"].(Object)["insecure"] != true || out["password"] != "fixture" {
+			t.Fatal("changed authentication", out)
+		}
+	}
+	for _, suffix := range []string{"&headerType=http", "&udp=maybe", "&spx=https%3A%2F%2Fbad.example", "&spx=%2Fbad%0Apath"} {
+		if _, err = Node("vless://uuid@example.test:443?security=reality&pbk=fixture"+suffix, "fixture", NodeOptions{}); err == nil {
+			t.Fatal("accepted unsupported behavior", suffix)
+		}
+	}
+}
+
+func TestNodeDiagnosticsAreDeterministicAndNeverContainValues(t *testing.T) {
+	_, err := Node("trojan://secret@example.test:443?zzz=private-value&aaa=other-secret", "fixture", NodeOptions{})
+	message := DescribeError(err)
+	if !strings.Contains(message, "aaa、zzz") || strings.Contains(message, "secret") || strings.Contains(message, "unsupported_") {
+		t.Fatal(message)
+	}
+	if got := DescribeError(OptionProblem("unsupported_node_option", "bad\ncredential-value")); strings.Contains(got, "credential") {
+		t.Fatal(got)
+	}
+}

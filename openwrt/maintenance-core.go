@@ -27,7 +27,7 @@ func coreMaintenanceCode(message string) string {
 	if message == "core_request_failed" {
 		return message
 	}
-	for _, code := range []string{"core_dns_failed", "core_reload_rolled_back", "core_recovery_failed", "core_network_check_failed", "core_network_ownership_failed", "core_process_ownership_failed", "core_ports_unavailable", "invalid_core_request", "core_recovery_snapshot_missing", "core_recovery_snapshot_invalid"} {
+	for _, code := range []string{"core_configuration_check_timeout", "core_dns_failed", "core_reload_rolled_back", "core_recovery_failed", "core_network_check_failed", "core_network_ownership_failed", "core_process_ownership_failed", "core_ports_unavailable", "invalid_core_request", "core_recovery_snapshot_missing", "core_recovery_snapshot_invalid"} {
 		if message == code {
 			return code
 		}
@@ -191,7 +191,7 @@ func (m *maintenanceManager) installSingBox(ctx context.Context, job *maintenanc
 	if err = m.save(job, "downloading"); err != nil {
 		return err
 	}
-	address := "https://github.com/SagerNet/sing-box/releases/download/v" + routercore.SingBoxVersion + "/" + release.Archive
+	address := "https://github.com/slobys/NaiLink/releases/download/" + routercore.SingBoxRelease + "/" + release.Archive
 	if err = m.fetch(ctx, address, archive, 128<<20); err != nil {
 		return errors.New("download_failed")
 	}
@@ -272,8 +272,8 @@ func (m *maintenanceManager) installSingBox(ctx context.Context, job *maintenanc
 	return nil
 }
 
-// Use only the static binary from the pinned OpenWrt package, without running
-// its init scripts or installing its defaults over NaiLink's configuration.
+// Use only the static binary from the checksum-pinned compatibility archive.
+// No service scripts or defaults are installed over NaiLink's configuration.
 func extractSingboxPackage(archive, destination string) error {
 	inner, err := os.CreateTemp(filepath.Dir(destination), ".core-payload-*")
 	if err != nil {

@@ -24,6 +24,35 @@ type coreFakeSession struct {
 	stopped           bool
 }
 
+func TestRouterCoreOldOptionalVersionRecoversAfterSameCoreRestart(t *testing.T) {
+	for _, previous := range []string{"dae", "sing-box", ""} {
+		t.Run(previous, func(t *testing.T) {
+			conf, dirs := coreFixtureConfig(t)
+			key := restartConfigKey(conf)
+			live := 0
+			m := &routerCoreManager{root: dirs[0], conf: conf, dirs: dirs}
+			m.factory = func(_ context.Context, name string, candidate *daeConfig.Config) (routerCoreSession, error) {
+				if restartConfigKey(candidate) != key {
+					t.Fatal("changed running configuration during migration")
+				}
+				if name == "sing-box" {
+					return nil, errors.New("singbox_version_mismatch")
+				}
+				live++
+				return &coreFakeSession{live: &live, done: make(chan error)}, nil
+			}
+			_, state, err := m.startInitial(routercore.State{Current: "sing-box", Previous: previous, Phase: "stable", Running: true}, conf)
+			if err != nil || state.Current != "dae" || state.Code != "core_startup_rolled_back" || live != 1 {
+				t.Fatal(state, live, err)
+			}
+			saved, err := routercore.ReadState(dirs[0])
+			if err != nil || saved.Current != "dae" || key != restartConfigKey(conf) {
+				t.Fatal("migration was not safely persisted", err)
+			}
+		})
+	}
+}
+
 func TestRouterCoreRandomRedirectTableOwnership(t *testing.T) {
 	_, loop, _ := net.ParseCIDR("127.0.0.1/32")
 	owner := routerCoreNetworkOwner{BaselineTables: []int{254, 255, 70000}}

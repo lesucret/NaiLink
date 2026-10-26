@@ -35,6 +35,52 @@ type sbConverter struct {
 	geo      map[string]string
 }
 
+type sbNodeProblems []string
+
+func (p sbNodeProblems) Error() string { return strings.Join(p, "；") }
+
+func singBoxNodeOutbounds(conf *daeConfig.Config) ([]sbObject, map[string]bool, []string, sbNodeProblems) {
+	outbounds := []sbObject{{"type": "direct", "tag": "direct"}}
+	names := map[string]bool{}
+	var warnings []string
+	var problems sbNodeProblems
+	for i, entry := range conf.Node {
+		name, link := daeCommon.GetTagFromLinkLikePlaintext(string(entry))
+		label := fmt.Sprintf("节点 %d", i+1)
+		if name != "" && !strings.Contains(name, "://") {
+			clean := strings.Map(func(r rune) rune {
+				if r < 32 || r == 127 {
+					return -1
+				}
+				return r
+			}, name)
+			chars := []rune(clean)
+			if len(chars) > 80 {
+				clean = string(chars[:80]) + "…"
+			}
+			label += "「" + clean + "」"
+		}
+		if name == "" {
+			problems = append(problems, label+"："+routercore.ProblemText("invalid_node_name"))
+			continue
+		}
+		fingerprint := ""
+		if conf.Global.TlsImplementation == "utls" {
+			fingerprint = conf.Global.UtlsImitate
+		}
+		out, err := routercore.Node(link, "node:"+name, routercore.NodeOptions{AllowInsecure: conf.Global.AllowInsecure, UTLS: fingerprint,
+			Warn: func(message string) { warnings = append(warnings, label+"："+message) },
+		})
+		if err != nil {
+			problems = append(problems, label+"："+routercore.DescribeError(err))
+			continue
+		}
+		names[name] = true
+		outbounds = append(outbounds, out)
+	}
+	return outbounds, names, warnings, problems
+}
+
 func coreOutbound(name string) (string, error) {
 	name = strings.TrimPrefix(name, "must_")
 	if name == "direct" {
@@ -45,8 +91,18 @@ func coreOutbound(name string) (string, error) {
 	}
 	return "group:" + name, nil
 }
-func singBoxConfig(conf *daeConfig.Config, dirs []string, ports sbPorts, transparent bool) (sbObject, []string, error) {
+func singBoxConfig(conf *daeConfig.Config, dirs []string, ports sbPorts, transparent bool) (output sbObject, reports []string, failure error) {
 	c := &sbConverter{conf: conf, dirs: dirs, geo: map[string]string{}}
+	defer func() {
+		if reports == nil {
+			reports = c.warnings
+		}
+	}()
+	outbounds, nodeNames, warnings, nodeProblems := singBoxNodeOutbounds(conf)
+	c.warnings = warnings
+	if len(nodeProblems) > 0 {
+		return nil, c.warnings, nodeProblems
+	}
 	if len(conf.Subscription) > 0 {
 		return nil, nil, errors.New("unresolved_subscription")
 	}
@@ -56,26 +112,12 @@ func singBoxConfig(conf *daeConfig.Config, dirs []string, ports sbPorts, transpa
 	if implementation := conf.Global.TlsImplementation; implementation != "" && implementation != "tls" && implementation != "utls" {
 		return nil, nil, errors.New("unsupported_global_option")
 	}
+	if mode := conf.Global.DialMode; mode != "" && mode != "domain" && mode != "ip" {
+		return nil, nil, errors.New("unsupported_dial_mode")
+	}
+	domainDial := conf.Global.DialMode == "" || conf.Global.DialMode == "domain"
 	if len(conf.Dns.Routing.Response.Rules) > 0 || len(conf.Dns.FixedDomainTtl) > 0 || conf.Dns.MaxCacheSize != 0 {
 		return nil, nil, errors.New("unsupported_dns_option")
-	}
-	outbounds := []sbObject{{"type": "direct", "tag": "direct"}}
-	nodeNames := map[string]bool{}
-	for i, entry := range conf.Node {
-		name, link := daeCommon.GetTagFromLinkLikePlaintext(string(entry))
-		if name == "" {
-			return nil, nil, errors.New("invalid_node_name")
-		}
-		fingerprint := ""
-		if conf.Global.TlsImplementation == "utls" {
-			fingerprint = conf.Global.UtlsImitate
-		}
-		out, err := routercore.Node(link, "node:"+name, routercore.NodeOptions{AllowInsecure: conf.Global.AllowInsecure, UTLS: fingerprint})
-		if err != nil {
-			return nil, nil, fmt.Errorf("节点 %d：%s", i+1, err.Error())
-		}
-		nodeNames[name] = true
-		outbounds = append(outbounds, out)
 	}
 	for _, group := range conf.Group {
 		for _, annotations := range group.FilterAnnotation {
@@ -173,6 +215,9 @@ func singBoxConfig(conf *daeConfig.Config, dirs []string, ports sbPorts, transpa
 			}
 			match["action"] = "route"
 			match["outbound"] = target
+			if domainDial && target != "direct" {
+				match["override_domain"] = true
+			}
 		}
 		routeRules = append(routeRules, match)
 	}
@@ -187,6 +232,9 @@ func singBoxConfig(conf *daeConfig.Config, dirs []string, ports sbPorts, transpa
 		}
 		routeRules = append(routeRules, sbObject{"action": "reject"})
 		final = "direct"
+	}
+	if domainDial && final != "direct" {
+		routeRules = append(routeRules, sbObject{"action": "route", "outbound": final, "override_domain": true})
 	}
 	dns, bootstrap, err := c.dns()
 	if err != nil {
@@ -236,15 +284,22 @@ func (c *sbConverter) asset(name string) (string, error) {
 	}
 	return "", errors.New("geodata_missing")
 }
-func (c *sbConverter) georule(kind, code string) (string, error) {
-	key := kind + ":" + strings.ToLower(code)
+func (c *sbConverter) georule(kind, code string, external ...string) (string, error) {
+	filename := kind + ".dat"
+	if len(external) > 0 {
+		filename = external[0]
+		if len(filename) > 128 || filepath.Base(filename) != filename || strings.HasPrefix(filename, ".") || !strings.HasSuffix(filename, ".dat") || strings.ContainsAny(filename, "\\\x00\r\n") {
+			return "", errors.New("invalid_external_geodata")
+		}
+	}
+	key := kind + ":" + filename + ":" + strings.ToLower(code)
 	if tag := c.geo[key]; tag != "" {
 		return tag, nil
 	}
 	if code == "" || strings.ContainsAny(code, "/\\\x00") {
 		return "", errors.New("invalid_geodata_reference")
 	}
-	file, err := c.asset(kind + ".dat")
+	file, err := c.asset(filename)
 	if err != nil {
 		return "", err
 	}
@@ -263,6 +318,9 @@ func (c *sbConverter) georule(kind, code string) (string, error) {
 				return "", errors.New("invalid_geodata")
 			}
 			cidrs = append(cidrs, netip.PrefixFrom(addr, int(cidr.Prefix)).Masked().String())
+		}
+		if len(cidrs) == 0 {
+			return "", errors.New("empty_geodata")
 		}
 		rule["ip_cidr"] = cidrs
 	} else {
@@ -338,6 +396,16 @@ func (c *sbConverter) function(f *config_parser.Function, dns bool) (sbObject, e
 				value = strings.TrimPrefix(value, "geosite:")
 			}
 			switch kind {
+			case "ext":
+				parts := strings.SplitN(value, ":", 2)
+				if len(parts) != 2 {
+					return nil, errors.New("invalid_external_geodata")
+				}
+				tag, err := c.georule("geosite", parts[1], parts[0])
+				if err != nil {
+					return nil, err
+				}
+				match["rule_set"] = []string{tag}
 			case "geosite":
 				tag, err := c.georule("geosite", value)
 				if err != nil {
@@ -355,12 +423,21 @@ func (c *sbConverter) function(f *config_parser.Function, dns bool) (sbObject, e
 				return nil, errors.New("unsupported_dns_match")
 			}
 			source := f.Name == "sip"
-			if strings.HasPrefix(value, "geoip:") || p.Key == "geoip" {
+			if strings.HasPrefix(value, "geoip:") || p.Key == "geoip" || p.Key == "ext" {
 				code := strings.TrimPrefix(value, "geoip:")
 				if source {
 					return nil, errors.New("unsupported_source_geoip")
 				}
-				tag, err := c.georule("geoip", code)
+				var external []string
+				if p.Key == "ext" {
+					parts := strings.SplitN(value, ":", 2)
+					if len(parts) != 2 {
+						return nil, errors.New("invalid_external_geodata")
+					}
+					external = []string{parts[0]}
+					code = parts[1]
+				}
+				tag, err := c.georule("geoip", code, external...)
 				if err != nil {
 					return nil, err
 				}

@@ -80,6 +80,7 @@ export const maintenanceMessages: Record<string, string> = {
   singbox_not_installed: '请先安装可选 sing-box 内核。',
   singbox_version_mismatch: 'sing-box 版本校验未通过，请重新安装管理的固定版本。',
   singbox_configuration_invalid: 'sing-box 配置校验未通过，原内核仍在运行。',
+  core_configuration_check_timeout: '内核配置检查超时，原内核仍在运行。规则库较大时请稍后重试，并检查 CPU 和内存状态。',
   core_environment_unsupported: '系统能力检查未通过，请查看高级设置中的兼容性信息。',
   core_network_conflict: '检测到已有 TUN、路由标记或其他代理接管，未强制切换。',
   core_rolled_back: '目标内核未能就绪，已恢复原内核、节点和运行配置。',
@@ -106,6 +107,15 @@ export const maintenanceMessages: Record<string, string> = {
 
 export function jobActive(job?: MaintenanceJob) {
   return job?.state === 'queued' || job?.state === 'running'
+}
+
+export function coreProblemLabel(value: string) {
+  if (maintenanceMessages[value]) return maintenanceMessages[value]
+  if (/unsupported_node_option/.test(value)) {
+    const node = value.match(/^节点\s*\d+/)?.[0]
+    return `${node ? `${node}：` : ''}节点包含尚未适配的附加参数，请重新检查兼容性以读取完整中文报告。`
+  }
+  return /[\u3400-\u9FFF]/.test(value) ? value : '配置暂未通过兼容性检查，请查看运行日志；原配置保留。'
 }
 
 export class MaintenanceAccessError extends Error {}

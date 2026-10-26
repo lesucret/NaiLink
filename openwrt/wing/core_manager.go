@@ -7,6 +7,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -150,12 +152,20 @@ func (m *routerCoreManager) plan(ctx context.Context, target string) routercore.
 	result.Nodes = len(conf.Node)
 	result.Groups = len(conf.Group)
 	result.Installed = target == "dae" || routerSingBoxInstalled()
-	result.Revision = routercore.Fingerprint([]any{current, target, conf, routerCurrentGeodataIdentity(m.dirs), result.Installed, routercore.SingBoxVersion})
+	result.Revision = routercore.Fingerprint([]any{current, target, conf, routerCurrentGeodataIdentity(m.dirs), result.Installed, routercore.SingBoxVersion, routercore.AdapterRevision})
+	var profile sbObject
 	if target == "sing-box" {
-		_, warnings, err := singBoxConfig(conf, m.dirs, sbPorts{Mixed: 39001, API: 39002, DNS: 39003, Secret: "configuration-check-only"}, !m.dry)
+		var warnings []string
+		var err error
+		profile, warnings, err = singBoxConfig(conf, m.dirs, sbPorts{Mixed: 39001, API: 39002, DNS: 39003, Secret: "configuration-check-only"}, !m.dry)
 		result.Warnings = warnings
 		if err != nil {
-			result.Problems = append(result.Problems, err.Error())
+			var nodes sbNodeProblems
+			if errors.As(err, &nodes) {
+				result.Problems = append(result.Problems, nodes...)
+			} else {
+				result.Problems = append(result.Problems, routercore.ProblemText(err.Error()))
+			}
 		}
 		if !result.Installed {
 			result.Problems = append(result.Problems, "singbox_not_installed")
@@ -165,7 +175,7 @@ func (m *routerCoreManager) plan(ctx context.Context, target string) routercore.
 		result.Problems = append(result.Problems, err.Error())
 	}
 	if len(result.Problems) == 0 && target == "sing-box" {
-		if err := routerCheckSingBox(ctx, conf, m.dirs, !m.dry); err != nil {
+		if err := routerCheckSingBoxProfile(ctx, profile); err != nil {
 			result.Problems = append(result.Problems, err.Error())
 		}
 	}
@@ -175,7 +185,20 @@ func (m *routerCoreManager) plan(ctx context.Context, target string) routercore.
 func routerCurrentGeodataIdentity(dirs []string) []any {
 	var result []any
 	for _, dir := range append(append([]string{}, dirs...), "/usr/share/daed", "/usr/share/v2ray") {
-		for _, name := range []string{"geoip.dat", "geosite.dat"} {
+		names := map[string]bool{"geoip.dat": true, "geosite.dat": true}
+		if entries, err := os.ReadDir(dir); err == nil {
+			for _, entry := range entries {
+				if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".dat") {
+					names[entry.Name()] = true
+				}
+			}
+		}
+		var ordered []string
+		for name := range names {
+			ordered = append(ordered, name)
+		}
+		sort.Strings(ordered)
+		for _, name := range ordered {
 			path := filepath.Join(dir, name)
 			if st, err := os.Stat(path); err == nil {
 				resolved, _ := filepath.EvalSymlinks(path)
@@ -334,6 +357,30 @@ func (m *routerCoreManager) switchPrepared(ctx context.Context, target string, o
 	m.log.WithField("core", oldState.Current).Warn("Core switch failed; previous core restored")
 	return errors.New("core_rolled_back")
 }
+func (m *routerCoreManager) startInitial(state routercore.State, conf *daeConfig.Config) (routerCoreSession, routercore.State, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	initial, err := m.start(ctx, state.Current, conf)
+	cancel()
+	// An optional-core version migration must also recover when the previous
+	// journal entry records a same-core restart. The canonical config is still
+	// dae's; never leave an otherwise working installation in a respawn loop.
+	if err != nil && state.Current == "sing-box" && (state.Previous == "dae" || err.Error() == "singbox_version_mismatch") && err.Error() != "core_cleanup_failed" {
+		ctx, cancel = context.WithTimeout(context.Background(), 45*time.Second)
+		initial, err = m.start(ctx, "dae", conf)
+		cancel()
+		if err == nil {
+			state.Current, state.Phase, state.Code = "dae", "rolled_back", "core_startup_rolled_back"
+			if saveErr := m.save(state, "ready"); saveErr != nil {
+				stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				_ = initial.Stop(stopCtx)
+				stopCancel()
+				return nil, state, saveErr
+			}
+		}
+	}
+	return initial, state, err
+}
+
 func Run(log *logrus.Logger, conf *daeConfig.Config, dirs []string, disableTimestamp, dry bool) (err error) {
 	defer close(GracefullyExit)
 	routerSetGeodataRoot(dirs)
@@ -376,26 +423,7 @@ func Run(log *logrus.Logger, conf *daeConfig.Config, dirs []string, disableTimes
 	routerCoreGlobal.Lock()
 	routerCoreGlobal.manager = m
 	routerCoreGlobal.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	initial, startErr := m.start(ctx, state.Current, conf)
-	err = startErr
-	cancel()
-	if err != nil && state.Current == "sing-box" && state.Previous == "dae" && err.Error() != "core_cleanup_failed" {
-		// The canonical configuration is retained; startup rollback does not
-		// select a different node, apply pending edits or discard user data.
-		ctx, cancel = context.WithTimeout(context.Background(), 45*time.Second)
-		initial, err = m.start(ctx, "dae", conf)
-		cancel()
-		if err == nil {
-			state.Current, state.Phase, state.Code = "dae", "rolled_back", "core_startup_rolled_back"
-			if saveErr := m.save(state, "ready"); saveErr != nil {
-				stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
-				_ = initial.Stop(stopCtx)
-				stopCancel()
-				return saveErr
-			}
-		}
-	}
+	initial, state, err := m.startInitial(state, conf)
 	if err != nil {
 		return err
 	}

@@ -206,6 +206,11 @@ subprocess.run(['nft','-f','-'],input=body.encode(),check=True)
                 resolved='['+expected+']' if ':' in expected else expected
                 body=run("ip","netns","exec","core-client","curl","--noproxy","*","--resolve",f"{name}:8080:{resolved}","-fsS","-m","10",f"http://{name}:8080/identity")
                 assert json.loads(body)["peer"] not in ("10.81.0.2","10.82.0.1",'fd81:81::2','fd81:82::1'),(label,"traffic bypassed proxy",body)
+            # Simulate an old/poisoned client DNS cache. Domain dial mode must
+            # route by the real HTTP host and let the proxy resolve it, without
+            # requiring clients to flush caches after switching cores.
+            body=run("ip","netns","exec","core-client","curl","--noproxy","*","--resolve","probe.test:8080:203.0.113.250","-fsS","-m","10","http://probe.test:8080/identity")
+            assert json.loads(body)["peer"] not in ("10.81.0.2","10.82.0.1"),(label,"stale DNS cache bypassed proxy",body)
             records=(args.workspace/'server.log').read_text()[server_offset:]
             assert 'inbound/vless[ai-in]' in records,(label,'AI rule did not use its independent inbound',records)
             print("PASS actual LAN DNS, TCP and AI routing:",label,flush=True)
@@ -218,6 +223,9 @@ subprocess.run(['nft','-f','-'],input=body.encode(),check=True)
         gql('mutation{switchCore(target:"sing-box",revision:'+json.dumps(plan["revision"])+')}')
         assert gql('{nodeLatencies(ids:'+json.dumps(node_ids)+'){alive}}')['nodeLatencies']==[], 'results from the previous core leaked'
         traffic("sing-box");assert digest_database(config/"wing.db")==before,"switch modified user tables"
+        for device, direction in [('lan0', 'ingress'), ('wan0', 'egress')]:
+            filters = json.loads(run('tc', '-j', 'filter', 'show', 'dev', device, direction))
+            assert not any(item.get('kind') == 'bpf' for item in filters), 'previous dae capture remained attached'
         probes=gql('mutation{testNodeLatencies(ids:'+json.dumps(node_ids)+'){alive message}}')['testNodeLatencies'];assert all(p['alive'] for p in probes),probes
         udp=gql('mutation{testNodeUDP(id:'+json.dumps(node_ids[0])+'){alive message}}')['testNodeUDP'];assert udp['alive'],udp
         if args.fw4:

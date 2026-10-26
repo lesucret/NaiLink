@@ -27,7 +27,7 @@ class MaintenanceFixture:
                 if outer.state["fail"] == "download":
                     self.send_error(503)
                     return
-                if singbox_package and path == "/SagerNet/sing-box/releases/download/v1.14.3/sing-box_1.14.3_openwrt_x86_64.ipk":
+                if singbox_package and path == "/slobys/NaiLink/releases/download/openwrt-v0.6.35/nailink-sing-box-1.14.3-nailink.1-x86_64.tar.gz":
                     data=singbox_package.read_bytes()
                     self.send_response(200);self.send_header("Content-Length",str(len(data)));self.end_headers();self.wfile.write(data);return
                 version = outer.state["next"]

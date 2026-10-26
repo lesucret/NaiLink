@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from '~/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '~/components/ui/dialog'
 import { useRouterMaintenance } from '~/hooks/useRouterMaintenance'
-import { maintenanceMessages } from '~/utils/router-maintenance'
+import { coreProblemLabel, maintenanceMessages } from '~/utils/router-maintenance'
 
 function problemLabel(value: string) {
   return (
@@ -23,7 +23,7 @@ function problemLabel(value: string) {
         unsupported_dns_fallback: '当前 DNS 回退策略尚未适配。',
       } as Record<string, string>
     )[value] ||
-    value
+    coreProblemLabel(value)
   )
 }
 export function RouterCore() {
@@ -77,7 +77,7 @@ export function RouterCore() {
           </p>
           {core?.code && (
             <p role="status" className="text-sm text-muted-foreground">
-              {maintenanceMessages[core.code] || `内核状态：${core.code}`}
+              {maintenanceMessages[core.code] || coreProblemLabel(core.code)}
             </p>
           )}
           <div className="grid grid-cols-2 gap-3" role="group" aria-label="目标内核">

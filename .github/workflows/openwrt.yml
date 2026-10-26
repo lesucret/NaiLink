@@ -14,7 +14,7 @@ on:
     inputs:
       version:
         description: 'Package version (X.Y.Z), must match source'
-        default: '0.6.34'
+        default: '0.6.35'
         required: true
       publish:
         description: 'After all checks, upload to a release draft (main only)'
@@ -84,9 +84,29 @@ jobs:
           name: openwrt-web
           path: apps/web/dist-openwrt/
 
+  optional-core:
+    if: github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        cpu: [x86_64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.0'
+          cache: false
+      - name: Build and verify the pinned REALITY compatibility core and corresponding source
+        run: python3 openwrt/singbox.py --cpu '${{ matrix.cpu }}' --work /tmp/nailink-core-build --output .build/optional-core --verify-pins
+      - uses: actions/upload-artifact@v7
+        with:
+          name: openwrt-core-${{ matrix.cpu }}
+          path: .build/optional-core/
+
   runtime:
     if: github.event_name == 'workflow_dispatch'
-    needs: web
+    needs: [web, optional-core]
     runs-on: ubuntu-24.04
     strategy:
       matrix:
@@ -153,11 +173,17 @@ jobs:
           chmod +x /tmp/nailink-protocol-servers/juicity/juicity-server
       - name: Real dae and sing-box switching, failure and dual-stack datapath
         if: matrix.cpu == 'x86_64'
+        uses: actions/download-artifact@v8
+        with:
+          name: openwrt-core-x86_64
+          path: .build/optional-core/
+      - name: Real dae and sing-box switching, failure and dual-stack datapath
+        if: matrix.cpu == 'x86_64'
         run: |
           sudo apt-get install -y --no-install-recommends nftables iproute2 ethtool tcpdump
           mkdir -p /tmp/nailink-core-static
-          curl -fL --proto '=https' -o /tmp/nailink-core-static/core.ipk https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box_1.14.3_openwrt_x86_64.ipk
-          echo 'c7b2945a72cb4836084a9bc1f3930ec11094c7362fd179c93fcaf401bfac26fa  /tmp/nailink-core-static/core.ipk' | sha256sum -c -
+          cp .build/optional-core/nailink-sing-box-1.14.3-nailink.1-x86_64.tar.gz /tmp/nailink-core-static/core.ipk
+          echo '084a4e845cc1c470dfb3dbdbb41dfbf5723decaff707d22c9486455fe6eba77f  /tmp/nailink-core-static/core.ipk' | sha256sum -c -
           tar -xzf /tmp/nailink-core-static/core.ipk -C /tmp/nailink-core-static
           tar -xzf /tmp/nailink-core-static/data.tar.gz -C /tmp/nailink-core-static
           (cd wing && DAED_TEST_SINGBOX=/tmp/nailink-core-static/usr/bin/sing-box go test -count=1 ./routercore ./dae)
@@ -325,6 +351,11 @@ jobs:
         with:
           name: openwrt-runtime-x86_64
           path: .build/source/
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: openwrt-core-*
+          merge-multiple: true
+          path: .build/release/
       - run: |
           cp .build/source/daed-openwrt-source.tar.gz .build/source/SOURCE_*.txt .build/release/
           cp openwrt/README.md openwrt/VALIDATION.md .build/release/

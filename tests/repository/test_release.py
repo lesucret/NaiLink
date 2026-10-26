@@ -41,6 +41,8 @@ class ReleaseSafetyTest(unittest.TestCase):
         (self.directory / "SOURCE_COMMIT.txt").write_text(SHA + "\n")
         (self.directory / "SOURCE_SUBMODULES.txt").write_text("fixed submodules\n")
         (self.directory / "daed-openwrt-source.tar.gz").write_bytes(b"test source")
+        for suffix in ("x86_64", "arm64", "source"):
+            (self.directory / ("nailink-sing-box-1.14.3-nailink.1-" + suffix + ".tar.gz")).write_bytes(b"core fixture")
         (self.directory / "install.sh").write_text("#!/bin/sh\nrelease=openwrt-v" + VERSION + "\n")
         self.manifest()
 
@@ -77,6 +79,13 @@ class ReleaseSafetyTest(unittest.TestCase):
 
     def test_valid_complete_artifact_set(self):
         self.assertEqual(len(release.validate_assets(self.directory, VERSION, SHA)), len(list(self.directory.iterdir())))
+
+    def test_missing_optional_core_source_blocks_release(self):
+        (self.directory / 'nailink-sing-box-1.14.3-nailink.1-source.tar.gz').unlink()
+        self.checksums()
+        with self.assertRaises(ValueError):
+            self.publish()
+        self.assertEqual(self.mutations(), [])
 
     def test_version_must_match_source(self):
         with self.assertRaises(ValueError):

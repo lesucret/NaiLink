@@ -134,15 +134,20 @@ func newCorePorts() (sbPorts, []net.Listener, error) {
 	return ports, listeners, nil
 }
 func routerCheckSingBox(ctx context.Context, conf *daeConfig.Config, dirs []string, transparent bool) error {
-	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
-	defer cancel()
-	if err := routerSingBoxVersion(ctx); err != nil {
-		return err
-	}
 	profile, _, err := singBoxConfig(conf, dirs, sbPorts{Mixed: 39001, API: 39002, DNS: 39003, Secret: "offline-configuration-check"}, transparent)
 	if err != nil {
 		return err
 	}
+	return routerCheckSingBoxProfile(ctx, profile)
+}
+
+func routerCheckSingBoxProfile(ctx context.Context, profile sbObject) error {
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	if err := routerSingBoxVersion(ctx); err != nil {
+		return err
+	}
+	var err error
 	if err = routercore.PrivateDir(routerCoreRuntimeDir); err != nil {
 		return err
 	}
@@ -161,6 +166,9 @@ func routerCheckSingBox(ctx context.Context, conf *daeConfig.Config, dirs []stri
 	}
 	command := exec.CommandContext(ctx, routerSingBoxBinary, "check", "--disable-color", "-c", path)
 	if err = command.Run(); err != nil {
+		if ctx.Err() != nil {
+			return errors.New("core_configuration_check_timeout")
+		}
 		return errors.New("singbox_configuration_invalid")
 	}
 	return nil

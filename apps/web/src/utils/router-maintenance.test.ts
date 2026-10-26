@@ -1,7 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
-import { jobActive, maintenanceAccessExpired, newerVersion, readMaintenance } from './router-maintenance'
+import {
+  coreProblemLabel,
+  jobActive,
+  maintenanceAccessExpired,
+  newerVersion,
+  readMaintenance,
+} from './router-maintenance'
 
 describe('maintenance state', () => {
+  it('shows Chinese reports and safely translates legacy or unknown core errors', () => {
+    expect(coreProblemLabel('节点 1：unsupported_node_option')).not.toContain('unsupported_')
+    expect(coreProblemLabel('unknown_future_error')).toContain('原配置保留')
+    const report = '节点 2「AI」：UDP 开关格式异常（参数：udp）'
+    expect(coreProblemLabel(report)).toBe(report)
+  })
   it('distinguishes expired maintenance permission from a running job', async () => {
     const parent = {
       L: {

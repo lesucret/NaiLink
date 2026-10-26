@@ -1,9 +1,17 @@
 # NaiLink · 奶油互联
 
 支持 OpenWrt、ImmortalWrt、iStoreOS 的现代 LuCI，提供 x86_64 / ARM64 及试验性 ARMv7 / MIPS32 / MIPSel32 的
-IPK 和 APK v3 安装包。当前测试版：[openwrt-v0.6.34](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.34)。
+IPK 和 APK v3 安装包。当前测试版：[openwrt-v0.6.35](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.35)。
 
 本项目从 0.6.14 起更名为 NaiLink（奶油互联），侧边栏显示 **NaiLink**。0.6.13 及更早版本显示 **Daed**。沿用原有包名、服务、路径和配置，可继续保留数据升级。
+
+## 0.6.35 节点参数与 Reality 兼容
+
+- 处理常见链接的 `headerType=none`、`udp` 和 `spx`；逐节点收集中文错误，参数只显示名称，不泄露密码或链接。
+- 保留外部 `.dat` 分流规则，规则变化会使旧兼容性报告失效；较大规则库的原生配置检查与生成分开计时，超时明确提示。
+- 可选 sing-box 改为固定的 `1.14.3-nailink.1` 兼容构建，修复真机复现的 Reality 密钥份额问题。对应源码、最小补丁和可复现构建方法随发行提供，原指纹和认证要求保持不变，详见[构建说明](singbox.md)。
+- 保留按域名拨号语义：在代理规则匹配后使用嗅探域名，避免旧错误 DNS 地址影响切换后联网；直连、按 IP 拨号及手动测试固定目标保持原行为。
+- 原安装方式、节点、订阅、群组和待生效编辑保留，默认仍为 dae。旧官方可选内核需在面板提示下重新安装，切换前继续检查配置，失败仍尝试恢复旧内核。
 
 ## 0.6.34 统一内核管理与切换
 

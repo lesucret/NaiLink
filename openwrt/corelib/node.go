@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -15,6 +16,7 @@ type Object = map[string]any
 type NodeOptions struct {
 	AllowInsecure bool
 	UTLS          string
+	Warn          func(string)
 }
 
 func decode64(s string) ([]byte, error) {
@@ -85,15 +87,19 @@ func Node(link, tag string, opt NodeOptions) (Object, error) {
 		return nil, errors.New("invalid_node")
 	}
 	used := map[string]bool{"name": true, "remarks": true, "group": true}
-	allowed := strings.Fields("security sni peer serverName alpn insecure allowInsecure allow_insecure skip-cert-verify fp fingerprint type net network host path serviceName service_name authority mode flow pbk publicKey sid shortId encryption packetEncoding uuid password method cipher plugin obfs obfs-password obfsPassword mport ports hop-interval hopInterval upmbps downmbps up down congestion_control congestion-control udp_relay_mode udp-relay-mode zero_rtt_handshake disable_sni udp-over-tcp udp_over_tcp uot name remarks group")
+	allowed := strings.Fields("security sni peer serverName alpn insecure allowInsecure allow_insecure skip-cert-verify fp fingerprint type net network host path serviceName service_name authority mode flow pbk publicKey sid shortId encryption packetEncoding uuid password method cipher plugin obfs obfs-password obfsPassword mport ports hop-interval hopInterval upmbps downmbps up down congestion_control congestion-control udp_relay_mode udp-relay-mode zero_rtt_handshake disable_sni udp-over-tcp udp_over_tcp uot name remarks group headerType spx udp")
 	known := map[string]bool{}
 	for _, key := range allowed {
 		known[key] = true
 	}
+	var rejected []string
 	for key, values := range q {
 		if !known[key] || len(values) != 1 {
-			return nil, errors.New("unsupported_node_option")
+			rejected = append(rejected, key)
 		}
+	}
+	if len(rejected) > 0 {
+		return nil, OptionProblem("unsupported_node_option", rejected...)
 	}
 	for _, aliases := range [][]string{{"sni", "peer", "serverName"}, {"fp", "fingerprint"}, {"type", "net", "network"}, {"insecure", "allowInsecure", "allow_insecure", "skip-cert-verify"}} {
 		var first string
@@ -194,6 +200,18 @@ func Node(link, tag string, opt NodeOptions) (Object, error) {
 			result["udp_over_tcp"] = Object{"enabled": true, "version": 2}
 		}
 	case "vless", "trojan":
+		if header := get("headerType"); header != "" && header != "none" {
+			return nil, OptionProblem("unsupported_header_type", "headerType")
+		}
+		if value := get("udp"); value != "" {
+			switch value {
+			case "0", "false":
+				result["network"] = "tcp"
+			case "1", "true": // Native sing-box enables TCP and UDP by default.
+			default:
+				return nil, OptionProblem("invalid_udp_option", "udp")
+			}
+		}
 		if u.Scheme == "vless" {
 			result["uuid"] = username
 			if flow := get("flow"); flow != "" && flow != "none" {
@@ -212,6 +230,14 @@ func Node(link, tag string, opt NodeOptions) (Object, error) {
 			result["password"] = auth
 		}
 		security := get("security")
+		if spider := get("spx"); spider != "" {
+			if security != "reality" || len(spider) > 2048 || !strings.HasPrefix(spider, "/") || strings.ContainsAny(spider, "\x00\r\n") {
+				return nil, OptionProblem("invalid_spider_path", "spx")
+			}
+			if opt.Warn != nil {
+				opt.Warn("spx 是 Xray 在 REALITY 验证失败后的爬虫路径；sing-box 没有对应行为。原始链接保留，正常 REALITY 认证仍使用原公钥、短 ID 和指纹。")
+			}
+		}
 		if u.Scheme == "trojan" || security == "tls" || security == "reality" {
 			result["tls"] = tls()
 		} else if security != "" && security != "none" {
@@ -315,10 +341,15 @@ func Node(link, tag string, opt NodeOptions) (Object, error) {
 	default:
 		return nil, errors.New("unsupported_protocol")
 	}
+	rejected = nil
 	for key, values := range q {
 		if !used[key] && values[0] != "" {
-			return nil, errors.New("unsupported_node_option")
+			rejected = append(rejected, key)
 		}
+	}
+	if len(rejected) > 0 {
+		sort.Strings(rejected)
+		return nil, OptionProblem("unsupported_node_option", rejected...)
 	}
 	return result, nil
 }

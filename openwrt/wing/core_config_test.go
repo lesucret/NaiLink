@@ -4,17 +4,139 @@ package dae
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/daeuniverse/dae-wing/routercore"
 	daeConfig "github.com/daeuniverse/dae/config"
 	"github.com/daeuniverse/dae/pkg/config_parser"
 	"github.com/daeuniverse/dae/pkg/geodata"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestRouterCoreReportsEveryInvalidNodeInChinese(t *testing.T) {
+	conf, dirs := coreFixtureConfig(t)
+	conf.Node = []daeConfig.KeyableString{
+		"香港:vless://uuid@example.test:443?future_a=do-not-show&future_b=secret",
+		"AI:trojan://secret@example.test:443?udp=invalid",
+		"第三个:ssr://unsupported",
+	}
+	before := restartConfigKey(conf)
+	_, _, err := singBoxConfig(conf, dirs, sbPorts{}, true)
+	var issues sbNodeProblems
+	if !errors.As(err, &issues) || len(issues) != 3 {
+		t.Fatal("did not collect every node", err)
+	}
+	joined := strings.Join(issues, " ")
+	for _, want := range []string{"香港", "AI", "第三个", "future_a、future_b", "UDP"} {
+		if !strings.Contains(joined, want) {
+			t.Fatal(joined)
+		}
+	}
+	if strings.Contains(joined, "secret") || strings.Contains(joined, "do-not-show") || strings.Contains(joined, "unsupported_") || strings.Contains(joined, "://") {
+		t.Fatal("unsafe/untranslated report", joined)
+	}
+	if before != restartConfigKey(conf) {
+		t.Fatal("report changed source configuration")
+	}
+}
+
+func TestRouterCorePreservesDomainDialAfterRouteSelection(t *testing.T) {
+	conf, dirs := coreFixtureConfig(t)
+	for _, mode := range []string{"domain", "ip"} {
+		conf.Global.DialMode = mode
+		key := restartConfigKey(conf)
+		profile, _, err := singBoxConfig(conf, dirs, sbPorts{}, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sawProxy := false
+		for _, rule := range profile["route"].(sbObject)["rules"].([]sbObject) {
+			if outbound, ok := rule["outbound"].(string); ok {
+				if outbound == "direct" && rule["override_domain"] != nil {
+					t.Fatal("changed direct rule addressing")
+				}
+				if outbound != "direct" {
+					sawProxy = true
+					if (rule["override_domain"] == true) != (mode == "domain") {
+						t.Fatal("lost explicit dial mode", mode)
+					}
+				}
+			}
+		}
+		// IP mode may retain the native final route instead of adding a catch-all.
+		if mode == "domain" && !sawProxy {
+			t.Fatal("missing proxy domain dial route")
+		}
+		if key != restartConfigKey(conf) {
+			t.Fatal("changed source configuration")
+		}
+	}
+	conf.Global.DialMode = "domain++"
+	if _, _, err := singBoxConfig(conf, dirs, sbPorts{}, true); err == nil || err.Error() != "unsupported_dial_mode" {
+		t.Fatal("silently approximated advanced dial mode", err)
+	}
+}
+
+func TestRouterCoreExternalGeodataPreservesRulesAndRevision(t *testing.T) {
+	conf, dirs := coreFixtureConfig(t)
+	for _, kind := range []string{"geoip", "geosite"} {
+		data, err := os.ReadFile(filepath.Join(dirs[0], kind+".dat"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(dirs[0], "adzero-"+kind+".dat"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := &sbConverter{conf: conf, dirs: dirs, geo: map[string]string{}}
+	before := restartConfigKey(conf)
+	for _, f := range []*config_parser.Function{
+		{Name: "domain", Params: []*config_parser.Param{{Key: "ext", Val: "adzero-geosite.dat:cn"}}},
+		{Name: "dip", Params: []*config_parser.Param{{Key: "ext", Val: "adzero-geoip.dat:cn"}}},
+	} {
+		if _, err := c.function(f, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(c.rulesets) != 2 || before != restartConfigKey(conf) {
+		t.Fatal("external rules changed source or were dropped")
+	}
+	for _, bad := range []string{"../geosite.dat:cn", "/etc/geosite.dat:cn", "invalid", "file.json:cn"} {
+		if _, err := c.function(&config_parser.Function{Name: "domain", Params: []*config_parser.Param{{Key: "ext", Val: bad}}}, false); err == nil {
+			t.Fatal("accepted unsafe external reference", bad)
+		}
+	}
+	old := routercore.Fingerprint(routerCurrentGeodataIdentity(dirs))
+	if err := os.WriteFile(filepath.Join(dirs[0], "adzero-geosite.dat"), []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if old == routercore.Fingerprint(routerCurrentGeodataIdentity(dirs)) {
+		t.Fatal("external rule updates did not invalidate plan")
+	}
+}
+
+func TestRouterCoreNativeCheckTimeoutIsNotConfigurationFailure(t *testing.T) {
+	root := t.TempDir()
+	binary := filepath.Join(root, "check-fixture")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nif [ \"$1\" = version ]; then echo 'sing-box version "+routercore.SingBoxVersion+"'; exit 0; fi\nexec sleep 5\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	oldBinary, oldDir := routerSingBoxBinary, routerCoreRuntimeDir
+	routerSingBoxBinary = binary
+	routerCoreRuntimeDir = filepath.Join(root, "private")
+	defer func() { routerSingBoxBinary = oldBinary; routerCoreRuntimeDir = oldDir }()
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	if err := routerCheckSingBoxProfile(ctx, sbObject{}); err == nil || err.Error() != "core_configuration_check_timeout" {
+		t.Fatal(err)
+	}
+}
 
 func coreFixtureConfig(t *testing.T) (*daeConfig.Config, []string) {
 	t.Helper()
