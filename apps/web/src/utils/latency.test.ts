@@ -1,7 +1,14 @@
 import type { TFunction } from 'i18next'
 import type { NodeLatencyProbeResult } from '~/apis'
+import { buildSchema, parse, validate } from 'graphql'
 import { describe, expect, it } from 'vitest'
-import { formatLatencyDescription, formatLatencyLabel, hasMeasuredLatency, latencyTone } from './latency'
+import {
+  formatLatencyDescription,
+  formatLatencyLabel,
+  hasMeasuredLatency,
+  latencyResultFields,
+  latencyTone,
+} from './latency'
 
 const measured = (latencyMs: number): NodeLatencyProbeResult => ({
   id: 'fixture',
@@ -10,6 +17,20 @@ const measured = (latencyMs: number): NodeLatencyProbeResult => ({
   testedAt: '',
 })
 describe('latency colors', () => {
+  it.each([false, true])('queries the supported latency fields for router=%s', (router) => {
+    const schema = buildSchema(`
+      scalar Time
+      type NodeLatency { id: ID! latencyMs: Int alive: Boolean! testedAt: Time! message: String ${router ? 'source: String!' : ''} }
+      type Query { nodeLatencies: [NodeLatency!]! }
+      type Mutation { testNodeLatencies(ids: [ID!]): [NodeLatency!]! }
+    `)
+    for (const query of [
+      `query { nodeLatencies { ${latencyResultFields(router)} } }`,
+      `mutation($ids: [ID!]) { testNodeLatencies(ids: $ids) { ${latencyResultFields(router)} } }`,
+    ])
+      expect(validate(schema, parse(query))).toEqual([])
+    if (router) expect(latencyResultFields(router)).toContain('source')
+  })
   it('distinguishes automatic and manual measurements without changing their numbers', () => {
     const translate = ((key: string) => key) as TFunction
     expect(formatLatencyDescription({ ...measured(180), source: 'manual' }, translate)).toBe(
@@ -18,7 +39,7 @@ describe('latency colors', () => {
     expect(formatLatencyDescription({ ...measured(30), source: 'automatic' }, translate)).toBe(
       'latency.automaticDescription',
     )
-    expect(formatLatencyDescription(measured(180), translate)).toBe('latency.manualDescription')
+    expect(formatLatencyDescription(measured(180), translate)).toBe('latency.unknownDescription')
     expect(formatLatencyDescription(undefined, translate)).toBeUndefined()
     expect(formatLatencyLabel({ ...measured(180), source: 'manual' }, translate)).toBe('180 ms')
     expect(formatLatencyLabel({ ...measured(30), source: 'automatic' }, translate)).toBe('30 ms')

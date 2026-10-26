@@ -17,6 +17,8 @@ import {
 } from '~/constants'
 import { useGQLQueryClient } from '~/contexts'
 import { graphql } from '~/schemas/gql'
+import { latencyResultFields } from '~/utils/latency'
+import { routerMode } from '~/utils/router-mode'
 
 export function getModeRequest(gqlClient: GQLClientInterface) {
   return async () => {
@@ -224,12 +226,7 @@ export function useNodeLatenciesQuery(refetchIntervalMs: number, enabled = true)
         `
           query NodeLatencies {
             nodeLatencies {
-              id
-              latencyMs
-              alive
-              testedAt
-              message
-              source
+              ${latencyResultFields(routerMode)}
             }
           }
         `,

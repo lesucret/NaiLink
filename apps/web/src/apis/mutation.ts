@@ -15,6 +15,8 @@ import {
 } from '~/constants'
 import { useGQLQueryClient } from '~/contexts'
 import { graphql } from '~/schemas/gql'
+import { latencyResultFields } from '~/utils/latency'
+import { routerMode } from '~/utils/router-mode'
 
 export function useSetJsonStorageMutation() {
   const gqlClient = useGQLQueryClient()
@@ -835,19 +837,14 @@ export function useTestNodeLatenciesMutation() {
         `
           mutation TestNodeLatencies($ids: [ID!]) {
             testNodeLatencies(ids: $ids) {
-              id
-              latencyMs
-              alive
-              testedAt
-              message
-              source
+              ${latencyResultFields(routerMode)}
             }
           }
         `,
         ids && ids.length > 0 ? { ids } : {},
       )
 
-      return data.testNodeLatencies
+      return data.testNodeLatencies.map((result) => ({ ...result, source: 'manual' as const }))
     },
     onSuccess: (results) => {
       queryClient.setQueryData<NodeLatencyProbeResult[]>(QUERY_KEY_NODE_LATENCY, (previous = []) => {

@@ -1,13 +1,25 @@
 import type { TFunction } from 'i18next'
 import type { NodeLatencyProbeResult } from '~/apis'
 
+// The generic Docker backend retains the upstream schema. Only router builds
+// request its additive source field; manual mutations still know their source.
+export function latencyResultFields(includeSource: boolean) {
+  return `id latencyMs alive testedAt message ${includeSource ? 'source' : ''}`
+}
+
 export function hasMeasuredLatency(result?: NodeLatencyProbeResult) {
   return result?.alive === true && Number.isFinite(result.latencyMs) && result.latencyMs! >= 0
 }
 
 export function formatLatencyDescription(result: NodeLatencyProbeResult | undefined, t: TFunction) {
   if (!result) return undefined
-  const source = t(result.source === 'automatic' ? 'latency.automaticDescription' : 'latency.manualDescription')
+  const source = t(
+    result.source === 'automatic'
+      ? 'latency.automaticDescription'
+      : result.source === 'manual'
+        ? 'latency.manualDescription'
+        : 'latency.unknownDescription',
+  )
   const time = result.testedAt ? new Date(result.testedAt).toLocaleString() : ''
   return time ? `${source} · ${time}` : source
 }
