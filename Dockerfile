@@ -19,6 +19,7 @@ WORKDIR /src
 COPY wing ./wing
 COPY openwrt/prepare-wing.py ./openwrt/prepare-wing.py
 COPY openwrt/wing ./openwrt/wing
+COPY openwrt/corelib ./openwrt/corelib
 COPY --from=build-web /src/apps/web/dist ./web
 ARG TARGETARCH
 ARG DAED_VERSION=source

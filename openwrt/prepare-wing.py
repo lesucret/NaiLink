@@ -527,6 +527,8 @@ type Mutation {
 
 
 def prepare(root):
+    if not all((HERE / "corelib" / name).is_file() for name in ("state.go", "node.go")):
+        raise ValueError("Missing shared core sources: include openwrt/corelib with the build inputs")
     # Validate/transform the small reviewed input set in isolation first. An
     # unknown edit in a late file must not leave earlier sources half updated.
     inputs = (

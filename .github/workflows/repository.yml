@@ -20,6 +20,7 @@ on:
         'pnpm-workspace.yaml',
         'openwrt/prepare-wing.py',
         'openwrt/wing/**',
+        'openwrt/corelib/**',
       ]
   pull_request:
     paths:
@@ -39,6 +40,7 @@ on:
         'pnpm-workspace.yaml',
         'openwrt/prepare-wing.py',
         'openwrt/wing/**',
+        'openwrt/corelib/**',
       ]
   workflow_dispatch:
 
