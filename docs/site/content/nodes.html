@@ -22,8 +22,9 @@
 <p>
   0.6.38 起，导入窗口会显示当前内核支持的协议。点击协议名称可查看格式和限制，手机也能点按查看。 sing-box 增加 Hysteria
   1、SSH、Snell 4/6 链接，以及单个出站或封闭出站组合 JSON；ShadowTLS 需配合内层代理使用。 原生 JSON 节点提供完整 JSON
-  编辑，仅供 sing-box 使用。0.6.39 起可在“代理内核”窗口按需安装 Naive HTTPS、WireGuard 和 Tor 扩展包，支持 x86_64 /
-  ARM64。下载约 30 MiB，请预留 400 MiB 存储；Tor 仅 TCP，首次引导较慢。SSR、Juicity 不由 sing-box 实现。
+  编辑，能等价转换的类型也可供 mihomo 使用。0.6.39 起可在“代理内核”窗口按需安装 Naive HTTPS、WireGuard 和 Tor
+  扩展包，支持 x86_64 / ARM64。下载约 30 MiB，请预留 400 MiB 存储；Tor 仅 TCP，首次引导较慢。SSR、Juicity 不由 sing-box
+  实现。
 </p>
 <ol>
   <li>点击<strong>添加订阅</strong>，粘贴你的订阅 URL。</li>
@@ -64,7 +65,7 @@
 </p>
 <h2 id="protocols">协议与配置核对</h2>
 <p>
-  路由模式整批测试使用后台任务，结果逐条显示；sing-box 共用一个私有测试进程，减少重复启动和排队。 两种内核使用同一 HTTP
+  路由模式整批测试使用后台任务，结果逐条显示；sing-box 共用一个私有测试进程，减少重复启动和排队。 三种内核使用同一 HTTP
   测试目标、方法与 3 秒尝试期限；数值包含新建连接和握手耗时，并非 Ping。
   停止保留已完成结果，剩余节点可继续；切换内核会取消旧任务，避免结果混淆。
 </p>
@@ -128,3 +129,11 @@
     >添加订阅组</a
   >。
 </p>
+<section>
+  <h2 id="mihomo">Mihomo 内核</h2>
+  <p>
+    0.6.40 新增 mihomo，与 dae、sing-box 在面板切换。按需安装，限 x86_64 /
+    ARM64。导入窗口按当前内核显示已适配协议；不接收完整 Clash
+    YAML。兼容性检查通过后才能切换，失败尝试恢复原可用内核，保留节点和配置。
+  </p>
+</section>

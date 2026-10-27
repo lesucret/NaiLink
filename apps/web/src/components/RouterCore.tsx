@@ -28,7 +28,7 @@ function problemLabel(value: string) {
 }
 export function RouterCore() {
   const [open, setOpen] = useState(false)
-  const [target, setTarget] = useState<'dae' | 'sing-box'>('sing-box')
+  const [target, setTarget] = useState<'dae' | 'sing-box' | 'mihomo'>('sing-box')
   const { query, mutation, busy } = useRouterMaintenance()
   const pendingMutations = useIsMutating()
   const core = query.data?.cores
@@ -39,14 +39,25 @@ export function RouterCore() {
     if (lastCore.current && lastCore.current !== core.current) client.invalidateQueries()
     lastCore.current = core.current
   }, [client, core?.current])
-  const current = core?.current === 'sing-box' ? 'sing-box' : core?.current === 'dae' ? 'dae' : '未知'
+  const current =
+    core?.current === 'sing-box' || core?.current === 'mihomo' || core?.current === 'dae' ? core.current : '未知'
   const plan = core?.plan?.target === target ? core.plan : undefined
-  const repairCore = plan?.problems?.includes('singbox_version_mismatch')
+  const selectedCore =
+    target === 'dae'
+      ? undefined
+      : core?.engines?.[target] ||
+        (target === 'sing-box' && core
+          ? { installed: core.installed, supported: core.supported, version: core.version }
+          : undefined)
+  const repairCore = plan?.problems?.includes(
+    target === 'mihomo' ? 'mihomo_version_mismatch' : 'singbox_version_mismatch',
+  )
   const job = query.data?.job
   const coreJob = job?.action.startsWith('core_') ? job : undefined
-  const suffix = target === 'sing-box' ? 'singbox' : 'dae'
+  const suffix = target === 'sing-box' ? 'singbox' : target
   const ready = !!plan?.compatible && /^[a-f0-9]{64}$/i.test(plan.revision)
-  const blocked = busy || pendingMutations > 0 || query.isError || !core || (target === 'sing-box' && !core.supported)
+  const blocked =
+    busy || pendingMutations > 0 || query.isError || !core || (target !== 'dae' && !selectedCore?.supported)
   return (
     <>
       <Button
@@ -73,21 +84,28 @@ export function RouterCore() {
           </DialogHeader>
           <p className="text-sm">
             当前内核：<strong>{current}</strong>
-            {current === 'sing-box' && core && ` · ${core.version}`}
+            {current !== 'dae' &&
+              current !== '未知' &&
+              core &&
+              ` · ${core.engines?.[current]?.version || core.version}`}
           </p>
           {core?.code && (
             <p role="status" className="text-sm text-muted-foreground">
               {maintenanceMessages[core.code] || coreProblemLabel(core.code)}
             </p>
           )}
-          <div className="grid grid-cols-2 gap-3" role="group" aria-label="目标内核">
-            {(['dae', 'sing-box'] as const).map((name) => (
+          <div className="grid grid-cols-3 gap-2" role="group" aria-label="目标内核">
+            {(['dae', 'sing-box', 'mihomo'] as const).map((name) => (
               <Button
                 key={name}
                 variant={target === name ? 'default' : 'outline'}
-                className="min-h-14"
+                className="min-h-14 whitespace-normal px-2 text-xs sm:text-sm"
                 aria-pressed={target === name}
-                disabled={busy || (name === 'sing-box' && core?.supported === false)}
+                disabled={
+                  busy ||
+                  (name !== 'dae' &&
+                    (core?.engines?.[name]?.supported ?? (name === 'sing-box' && core?.supported)) === false)
+                }
                 onClick={() => setTarget(name)}
               >
                 {name}
@@ -96,17 +114,22 @@ export function RouterCore() {
             ))}
           </div>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            dae 使用原有 eBPF 接管。sing-box 按需安装固定版本 {core?.version || '—'}，使用 TUN /
-            nftables，需要额外可用存储；首版支持 x86_64、ARM64。两种内核每次只运行一种，不兼容配置会阻止切换。
+            dae 使用 eBPF 接管；sing-box、mihomo 按需安装固定版本，使用 TUN / nftables，支持 x86_64、ARM64。
+            每次只运行一种内核，切换前检查实际配置和连接，失败尝试恢复原内核。不兼容参数会列出并阻止切换。
           </p>
-          {target === 'sing-box' && (!core?.installed || repairCore) && (
-            <Button
-              className="min-h-11"
-              disabled={blocked || current === 'sing-box'}
-              onClick={() => mutation.mutate('core_install_singbox')}
-            >
-              {repairCore ? '重新安装 sing-box（请先切回 dae）' : '下载并安装 sing-box（保留当前内核运行）'}
-            </Button>
+          {target !== 'dae' && (!selectedCore?.installed || repairCore) && (
+            <section className="space-y-2" aria-label="安装可选内核">
+              <p className="text-xs text-muted-foreground">
+                {target} · {selectedCore?.version || '—'}；按需下载，不使用时不运行。安装前请预留 180 MiB 可用存储。
+              </p>
+              <Button
+                className="min-h-11 w-full whitespace-normal"
+                disabled={blocked || current === target}
+                onClick={() => mutation.mutate(target === 'mihomo' ? 'core_install_mihomo' : 'core_install_singbox')}
+              >
+                {repairCore ? `重新安装 ${target}（请先切换到其他内核）` : `下载并安装 ${target}（保留当前内核运行）`}
+              </Button>
+            </section>
           )}
           {target === 'sing-box' && (
             <section className="space-y-2 rounded-lg border p-3 text-sm" aria-label="扩展协议组件">
@@ -163,7 +186,7 @@ export function RouterCore() {
                       ? `切换完成，当前内核：${current}`
                       : coreJob.action === 'core_install_extra'
                         ? '扩展协议包已安装，现有节点和配置保留。'
-                        : coreJob.action === 'core_install_singbox'
+                        : coreJob.action === 'core_install_singbox' || coreJob.action === 'core_install_mihomo'
                           ? '内核已安装，请检查兼容性后再切换。'
                           : '兼容性检查完成，请查看报告。'
                     : '正在检查、安装或切换；可关闭窗口，后台任务继续执行。'}
@@ -187,7 +210,7 @@ export function RouterCore() {
             <Button
               variant="outline"
               className="min-h-11"
-              disabled={blocked || (target === 'sing-box' && !core?.installed)}
+              disabled={blocked || (target !== 'dae' && !selectedCore?.installed)}
               onClick={() => mutation.mutate(`core_check_${suffix}`)}
             >
               检查兼容性

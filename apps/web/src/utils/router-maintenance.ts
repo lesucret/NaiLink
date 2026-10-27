@@ -4,12 +4,15 @@ export type MaintenanceAction =
   | 'geodata'
   | 'core_check_dae'
   | 'core_check_singbox'
+  | 'core_check_mihomo'
   | 'core_install_singbox'
+  | 'core_install_mihomo'
   | 'core_install_extra'
   | 'core_switch_dae'
   | 'core_switch_singbox'
+  | 'core_switch_mihomo'
 export interface CorePlan {
-  target: 'dae' | 'sing-box'
+  target: 'dae' | 'sing-box' | 'mihomo'
   revision: string
   compatible: boolean
   installed: boolean
@@ -19,6 +22,7 @@ export interface CorePlan {
   groups: number
 }
 export interface CoreStatus {
+  engines?: Record<string, { installed: boolean; supported: boolean; version: string }>
   current: string
   phase: string
   code?: string
@@ -83,6 +87,13 @@ export const maintenanceMessages: Record<string, string> = {
   extra_rollback_failed: '组件指针恢复未确认，旧版文件和配置保留，请检查日志。',
   core_incompatible: '兼容性检查未通过，原内核和配置保留。请查看检查报告。',
   core_configuration_changed: '运行配置或规则库已变化，请重新检查兼容性再切换。',
+  mihomo_not_installed: '请先按需安装 mihomo 内核，当前内核和配置保留。',
+  mihomo_version_mismatch: 'mihomo 版本校验未通过，请切换到其他内核后重新安装。',
+  mihomo_configuration_invalid: 'mihomo 配置检查未通过，当前内核继续运行。请查看兼容性报告。',
+  mihomo_protocol_unsupported: '此协议暂未适配 mihomo，节点保留；可选择其他内核。',
+  mihomo_option_unsupported: '节点包含尚不能等价转换为 mihomo 的参数，原节点保留。',
+  mihomo_rule_unsupported: '当前路由匹配不能安全转换为 mihomo，原内核和规则保留。',
+  mihomo_dns_unsupported: '当前 DNS 规则不能安全转换为 mihomo，原内核和 DNS 配置保留。',
   singbox_not_installed: '请先安装可选 sing-box 内核。',
   singbox_version_mismatch: 'sing-box 版本校验未通过，请重新安装管理的固定版本。',
   singbox_configuration_invalid: 'sing-box 配置校验未通过，原内核仍在运行。',
@@ -101,7 +112,7 @@ export const maintenanceMessages: Record<string, string> = {
   core_dns_failed: '目标内核 DNS 查询未通过检查，正在恢复原内核。',
   core_restarted: '内核意外退出后已自动重启，并通过连接检查。',
   core_recovery_failed: '内核自动恢复失败，管理面板和原有配置仍保留。请检查日志后重启服务。',
-  core_startup_rolled_back: '所选内核启动失败，已恢复 dae 和原运行配置。',
+  core_startup_rolled_back: '所选内核启动失败，已恢复原可用内核和运行配置。',
   core_interrupted_recovered: '上次切换被中断，已恢复原内核和运行配置。',
   core_reload_rolled_back: '新配置未能就绪，已恢复原运行配置。',
   core_connectivity_failed: '目标内核的实际连接检查失败，已尝试恢复原内核。',

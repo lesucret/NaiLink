@@ -75,6 +75,7 @@ func (w *routerCoreBoundedWriter) Write(p []byte) (int, error) {
 }
 
 type sbLogWriter struct {
+	engine  string
 	mu      sync.Mutex
 	pending []byte
 	log     *logrus.Logger
@@ -104,7 +105,16 @@ func (w *sbLogWriter) Write(data []byte) (int, error) {
 		case strings.Contains(prefix, "DEBUG") || strings.Contains(prefix, "TRACE"):
 			level = logrus.DebugLevel
 		}
-		w.log.WithField("core", "sing-box").Log(level, line)
+		if strings.Contains(line, "level=error") || strings.Contains(line, "level=fatal") {
+			level = logrus.ErrorLevel
+		} else if strings.Contains(line, "level=warning") || strings.Contains(line, "level=warn") {
+			level = logrus.WarnLevel
+		}
+		engine := w.engine
+		if engine == "" {
+			engine = "sing-box"
+		}
+		w.log.WithField("core", engine).Log(level, line)
 	}
 	if len(w.pending) > 32768 {
 		w.pending = w.pending[:0]
@@ -178,6 +188,8 @@ func routerCheckSingBoxProfile(ctx context.Context, profile sbObject) error {
 }
 
 type routerSingBoxSession struct {
+	engine      string
+	dnsBridge   *mhDNSBridge
 	hasTor      bool
 	mu          sync.Mutex
 	cmd         *exec.Cmd
@@ -198,6 +210,9 @@ type routerSingBoxSession struct {
 }
 
 func newRouterSingBoxSession(ctx context.Context, log *logrus.Logger, conf *daeConfig.Config, dirs []string, transparent bool, profileHooks ...func(sbObject, sbPorts)) (routerCoreSession, error) {
+	return newRouterNativeSession(ctx, log, conf, dirs, transparent, "sing-box", profileHooks...)
+}
+func newRouterNativeSession(ctx context.Context, log *logrus.Logger, conf *daeConfig.Config, dirs []string, transparent bool, engine string, profileHooks ...func(sbObject, sbPorts)) (_ routerCoreSession, failure error) {
 	ports, reserved, err := newCorePorts()
 	if err != nil {
 		return nil, errors.New("core_ports_unavailable")
@@ -207,16 +222,54 @@ func newRouterSingBoxSession(ctx context.Context, log *logrus.Logger, conf *daeC
 			_ = l.Close()
 		}
 	}()
-	profile, _, err := singBoxConfig(conf, dirs, ports, transparent)
-	if err != nil {
-		return nil, err
-	}
-	program, hasTor, err := routerPrepareExtra(ctx, profile, !transparent)
+	profile, _, err := coreCanonicalConfig(conf, dirs, ports, transparent, engine)
 	if err != nil {
 		return nil, err
 	}
 	for _, hook := range profileHooks {
 		hook(profile, ports)
+	}
+	program, hasTor := routerSingBoxBinary, false
+	var bridge *mhDNSBridge
+	if engine == "mihomo" {
+		if err = routerMihomoVersion(ctx); err != nil {
+			return nil, err
+		}
+		if !transparent {
+			route := profile["route"].(sbObject)
+			if route["auto_detect_interface"] == true {
+				iface, e := routerMainWANInterface()
+				if e != nil {
+					return nil, e
+				}
+				route["default_interface"] = iface
+			}
+		}
+		program = routerMihomoBinary
+		profile, err = mihomoFromCanonical(profile, conf, ports)
+		if err != nil {
+			return nil, err
+		}
+		dnslog := log
+		if !transparent {
+			if manager := currentRouterCoreManager(); manager != nil && manager.log != nil {
+				dnslog = manager.log
+			}
+		}
+		bridge, err = startMihomoDNS(profile, ports, dnslog)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if failure != nil {
+				bridge.Close()
+			}
+		}()
+	} else {
+		program, hasTor, err = routerPrepareExtra(ctx, profile, !transparent)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err = routercore.PrivateDir(routerCoreRuntimeDir); err != nil {
 		return nil, err
@@ -225,7 +278,7 @@ func newRouterSingBoxSession(ctx context.Context, log *logrus.Logger, conf *daeC
 	if err != nil {
 		return nil, err
 	}
-	s := &routerSingBoxSession{done: make(chan error, 1), exit: make(chan struct{}), ports: ports, dir: dir, conf: conf, dirs: dirs, transparent: transparent, log: log, hasTor: hasTor}
+	s := &routerSingBoxSession{engine: engine, dnsBridge: bridge, done: make(chan error, 1), exit: make(chan struct{}), ports: ports, dir: dir, conf: conf, dirs: dirs, transparent: transparent, log: log, hasTor: hasTor}
 	data, err := json.Marshal(profile)
 	if err != nil {
 		_ = os.RemoveAll(dir)
@@ -237,12 +290,18 @@ func newRouterSingBoxSession(ctx context.Context, log *logrus.Logger, conf *daeC
 		return nil, err
 	}
 	check := exec.CommandContext(ctx, program, "check", "--disable-color", "-c", path)
+	if engine == "mihomo" {
+		check = exec.CommandContext(ctx, program, "-t", "-d", dir, "-f", path)
+	}
 	if err = check.Run(); err != nil {
 		_ = os.RemoveAll(dir)
+		if engine == "mihomo" {
+			return nil, errors.New("mihomo_configuration_invalid")
+		}
 		return nil, errors.New("singbox_configuration_invalid")
 	}
 	if transparent && conf != EmptyConfig {
-		if err = routerClaimSingboxNetwork(dirs[0], path); err != nil {
+		if err = routerClaimNativeNetwork(dirs[0], path, engine); err != nil {
 			_ = os.RemoveAll(dir)
 			return nil, err
 		}
@@ -258,6 +317,9 @@ func newRouterSingBoxSession(ctx context.Context, log *logrus.Logger, conf *daeC
 		return cause
 	}
 	s.cmd = exec.Command(program, "run", "--disable-color", "-D", dir, "-c", path)
+	if engine == "mihomo" {
+		s.cmd = exec.Command(program, "-d", dir, "-f", path)
+	}
 	// TUN and routes are native netlink operations. The manager owns fw4
 	// integration; hide external tools from this optional child so its automatic
 	// fw4 hook cannot replace shared policies or reload other plugins' rules.
@@ -272,11 +334,14 @@ func newRouterSingBoxSession(ctx context.Context, log *logrus.Logger, conf *daeC
 	}
 	s.cmd.Env = append(s.cmd.Env, "PATH="+emptyPath)
 	s.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGTERM}
-	writer := &sbLogWriter{log: log}
+	writer := &sbLogWriter{log: log, engine: engine}
 	s.cmd.Stdout = writer
 	s.cmd.Stderr = writer
 	for _, l := range reserved {
 		_ = l.Close()
+	}
+	if bridge != nil {
+		bridge.releaseReservations()
 	}
 	if err = s.cmd.Start(); err != nil {
 		return nil, cleanupFailure(errors.New("core_start_failed"))
@@ -325,21 +390,33 @@ func (s *routerSingBoxSession) Ready(ctx context.Context) error {
 	s = s.current()
 	ticker := time.NewTicker(75 * time.Millisecond)
 	defer ticker.Stop()
+	verifyAttempts := 0
 	for {
-		if s.api(ctx, "/version", nil) == nil {
+		if s.api(ctx, "/version", nil) == nil && routerNativeListenersReady(ctx, s) {
 			if !s.transparent || s.conf == EmptyConfig {
 				s.ready.Store(true)
 				return nil
 			}
 			if _, err := net.InterfaceByName(routercore.TunName); err == nil {
 				if err = routerRecordRedirectTable(s.dirs[0]); err != nil {
-					return err
+					if err.Error() != "core_not_ready" {
+						return err
+					}
+					select {
+					case <-ctx.Done():
+						return errors.New("core_not_ready")
+					case <-ticker.C:
+						continue
+					}
 				}
 				if err = routerVerifySingBox(ctx, s); err == nil {
 					s.ready.Store(true)
 					return nil
 				} else {
-					return err
+					verifyAttempts++
+					if verifyAttempts >= 3 || err.Error() != "core_dns_failed" && err.Error() != "core_connectivity_failed" {
+						return err
+					}
 				}
 			}
 		}
@@ -378,6 +455,9 @@ func (s *routerSingBoxSession) Stop(ctx context.Context) error {
 			return errors.New("core_cleanup_failed")
 		}
 	}
+	if s.dnsBridge != nil {
+		s.dnsBridge.Close()
+	}
 	if s.owned {
 		if err := routerReleaseSingboxNetwork(s.dirs[0]); err != nil {
 			return err
@@ -400,7 +480,7 @@ func (s *routerSingBoxSession) Reload(message *ReloadMessage) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), routerCoreStartTimeout(conf))
 	defer cancel()
-	if err = routerCheckSingBox(ctx, conf, old.dirs, old.transparent); err != nil {
+	if err = routerCheckNative(ctx, conf, old.dirs, old.transparent, old.engine); err != nil {
 		if rollback != nil {
 			_ = rollback()
 		}
@@ -412,7 +492,7 @@ func (s *routerSingBoxSession) Reload(message *ReloadMessage) error {
 		}
 		return err
 	}
-	candidate, err := newRouterSingBoxSession(ctx, old.log, conf, old.dirs, old.transparent)
+	candidate, err := newRouterNativeSession(ctx, old.log, conf, old.dirs, old.transparent, old.engine)
 	if err == nil {
 		err = candidate.Ready(ctx)
 	}
@@ -440,7 +520,7 @@ func (s *routerSingBoxSession) Reload(message *ReloadMessage) error {
 	}
 	restoreCtx, stop := context.WithTimeout(context.Background(), routerCoreStartTimeout(old.conf))
 	defer stop()
-	restored, restoreErr := newRouterSingBoxSession(restoreCtx, old.log, old.conf, old.dirs, old.transparent)
+	restored, restoreErr := newRouterNativeSession(restoreCtx, old.log, old.conf, old.dirs, old.transparent, old.engine)
 	if restoreErr == nil {
 		restoreErr = restored.Ready(restoreCtx)
 	}
@@ -471,7 +551,7 @@ func RouterCoreDialContext(ctx context.Context, network, address string) (net.Co
 	active := m.active
 	current := m.state.Current
 	m.mu.RUnlock()
-	if current != "sing-box" {
+	if current == "dae" {
 		return nil, false, nil
 	}
 	s, ok := active.(*routerSingBoxSession)
@@ -578,4 +658,39 @@ func routerCoreStartTimeout(conf *daeConfig.Config) time.Duration {
 		}
 	}
 	return 45 * time.Second
+}
+
+// The controller can bind before DNS and mixed listeners (notably on ARM).
+// Confirm local authentication before reporting ready; no user test is timed here.
+func routerNativeListenersReady(ctx context.Context, s *routerSingBoxSession) bool {
+	d := net.Dialer{Timeout: 250 * time.Millisecond}
+	c, e := d.DialContext(ctx, "tcp4", routercore.SocksAddress(s.ports.Mixed))
+	if e != nil {
+		return false
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(250 * time.Millisecond))
+	if _, e = c.Write([]byte{5, 1, 2}); e != nil {
+		return false
+	}
+	var reply [2]byte
+	if _, e = io.ReadFull(c, reply[:]); e != nil || reply != [2]byte{5, 2} {
+		return false
+	}
+	user := "nailink"
+	auth := append([]byte{1, byte(len(user))}, []byte(user)...)
+	auth = append(auth, byte(len(s.ports.Secret)))
+	auth = append(auth, []byte(s.ports.Secret)...)
+	if _, e = c.Write(auth); e != nil {
+		return false
+	}
+	if _, e = io.ReadFull(c, reply[:]); e != nil || reply != [2]byte{1, 0} {
+		return false
+	}
+	dns, e := d.DialContext(ctx, "tcp4", routercore.SocksAddress(s.ports.DNS))
+	if e != nil {
+		return false
+	}
+	dns.Close()
+	return true
 }

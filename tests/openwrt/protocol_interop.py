@@ -56,10 +56,30 @@ class UDP(socketserver.BaseRequestHandler):
         sock.sendto(data, self.client_address)
 
 
+_reserved_ports = {}
+
+
+def release_port(number):
+    for sock in _reserved_ports.pop(number, []):
+        sock.close()
+
+
 def port(udp=False):
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
+    # SS and several other inbounds bind both transports. Keep both ports
+    # reserved until the server starts, including while fixture code compiles.
+    for _ in range(64):
+        tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        tcp.bind(('127.0.0.1', 0))
+        number = tcp.getsockname()[1]
+        try:
+            udp_socket.bind(('127.0.0.1', number))
+        except OSError:
+            tcp.close(); udp_socket.close()
+            continue
+        _reserved_ports[number] = [tcp, udp_socket]
+        return number
+    raise RuntimeError('Cannot reserve unique protocol fixture ports')
 
 
 def run(args):
@@ -76,6 +96,7 @@ def run(args):
 def run_fixture(args, http_port, udp_port):
     with tempfile.TemporaryDirectory(prefix="daed-protocol-") as temp, contextlib.ExitStack() as cleanup:
         work = Path(temp)
+        cleanup.callback(lambda: [release_port(n) for n in list(_reserved_ports)])
         subprocess.run([
             "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(work / "key.pem"),
             "-out", str(work / "cert.pem"), "-subj", "/CN=fixture.test", "-addext", "subjectAltName=DNS:fixture.test,IP:127.0.0.1", "-days", "1",
@@ -150,6 +171,7 @@ def run_fixture(args, http_port, udp_port):
         subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(work / 'ssh-key')], check=True)
         ssh_source = Path(__file__).with_name('ssh_fixture.go')
         subprocess.run(['go', 'build', '-o', str(work / 'ssh-fixture'), str(ssh_source)], cwd=args.wing, check=True)
+        release_port(ssh_port)
         ssh_process = subprocess.Popen([str(work / 'ssh-fixture'), str(work / 'ssh-key'), str(ssh_port), str(http_port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         cleanup.callback(ssh_process.wait, 5)
         cleanup.callback(ssh_process.terminate)
@@ -276,6 +298,8 @@ def run_fixture(args, http_port, udp_port):
         casefile.write_text(json.dumps({"Target": f"http://{args.fixture_address}:{http_port}", "UDP": f"{args.fixture_address}:{udp_port}", "Cases": cases, "NativeCases":native_cases}), encoding="utf-8")
         subprocess.run([str(args.sing_box), "check", "-c", str(config)], check=True)
         with (work / "server.log").open("w", encoding="utf-8") as log:
+            for number in list(_reserved_ports):
+                release_port(number)
             process = subprocess.Popen([str(args.sing_box), "run", "-c", str(config)], stdout=log, stderr=subprocess.STDOUT)
             juicity = None
             try:
@@ -291,7 +315,11 @@ def run_fixture(args, http_port, udp_port):
                     env['DAED_TEST_SINGBOX'] = str(args.client_singbox.resolve(strict=True))
                 if args.client_extra:
                     env['DAED_TEST_SINGBOX_EXTRA'] = str(args.client_extra.resolve(strict=True))
-                return subprocess.run(["go", "test", "-count=1", "-timeout=180s", "-v", "./graphql/service/node", "./dae", "github.com/daeuniverse/dae/control", "-run", "TestRouterProtocolInteroperability$|TestRouterCoreProtocolInteroperability$|TestRouterCoreBulkProbe$|TestRouterHTTPProtocolDownload$|TestRouterConnectionProtocolFailover$"], cwd=args.wing, env=env).returncode
+                result = 0 if args.mihomo_only else subprocess.run(["go", "test", "-count=1", "-timeout=180s", "-v", "./graphql/service/node", "./dae", "github.com/daeuniverse/dae/control", "-run", "TestRouterProtocolInteroperability$|TestRouterCoreProtocolInteroperability$|TestRouterCoreBulkProbe$|TestRouterHTTPProtocolDownload$|TestRouterConnectionProtocolFailover$"], cwd=args.wing, env=env).returncode
+                if result == 0 and args.client_mihomo:
+                    env['DAED_TEST_MIHOMO'] = str(args.client_mihomo.resolve(strict=True))
+                    result = subprocess.run(['go', 'test', '-count=1', '-timeout=240s', '-v', './dae', '-run', '^TestRouterMihomoProtocolInteroperability$'], cwd=args.wing, env=env).returncode
+                return result
             finally:
                 process.terminate()
                 process.wait(timeout=5)
@@ -307,5 +335,7 @@ if __name__ == "__main__":
     parser.add_argument("--juicity-server", type=Path, help="Optional independent official Juicity server (tested with v0.5.0)")
     parser.add_argument('--client-singbox', type=Path, help='Also exercise the optional native sing-box adapter')
     parser.add_argument('--fixture-address', default='127.0.0.1', help='Non-loopback local address for userspace WireGuard tests')
+    parser.add_argument('--mihomo-only', action='store_true', help='Run only Mihomo adapter tests while iterating')
+    parser.add_argument('--client-mihomo', type=Path, help='Also exercise the optional Mihomo adapter')
     parser.add_argument('--client-extra', type=Path, help='Extracted optional extension bundle')
     raise SystemExit(run(parser.parse_args()))

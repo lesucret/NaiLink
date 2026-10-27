@@ -16,7 +16,7 @@ func ReadRouterReadiness(details bool) RouterReadiness {
 		if phase != "ready" {
 			return RouterReadiness{Core: name, Phase: "core_" + phase}
 		}
-		if name == "sing-box" {
+		if name != "dae" {
 			result := RouterReadiness{Core: name, Phase: "starting", Configured: conf != EmptyConfig}
 			if s, ok := active.(*routerSingBoxSession); ok {
 				s = s.current()
@@ -48,7 +48,7 @@ func routerCoreOverview(windowSec, maxPoints int) (*RuntimeOverview, bool, error
 	m.mu.RLock()
 	name, active := m.state.Current, m.active
 	m.mu.RUnlock()
-	if name != "sing-box" {
+	if name == "dae" {
 		return nil, false, nil
 	}
 	original, ok := active.(*routerSingBoxSession)

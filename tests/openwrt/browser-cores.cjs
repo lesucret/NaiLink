@@ -60,10 +60,10 @@ async function checkManualLatency(page, context, touch, screenshot) {
   await page.screenshot({ path: screenshot, fullPage: true })
   await frame.getByRole('button', { name: '导入节点', exact: true }).click()
   const guide = frame.locator('[data-protocol-guide]')
-  await waitText(guide, /当前内核：(dae|sing-box)/)
+  await waitText(guide, /当前内核：(dae|sing-box|mihomo)/)
   await guide.getByRole('button', { name: 'VLESS / REALITY', exact: true }).click()
   await guide.getByRole('status').waitFor()
-  if (/sing-box/.test(await guide.textContent())) {
+  if (/当前内核：sing-box/.test(await guide.textContent())) {
     await guide.getByRole('button', { name: 'SSH', exact: true }).click()
     await waitText(guide, /内联密钥/)
     await guide.getByRole('button', { name: 'Naive HTTPS', exact: true }).click()
@@ -161,6 +161,34 @@ async function checkManualLatency(page, context, touch, screenshot) {
     await waitText(dialog, /已恢复原内核/)
     assert.equal(JSON.parse((await gql('{coreStatus}')).coreStatus).current, 'dae')
     await control('core_fault', { fail: false })
+    await dialog.getByRole('button', {name:'mihomo',exact:true}).click()
+    await control('maintenance',{fail:'core_checksum'})
+    await dialog.getByRole('button',{name:/下载并安装 mihomo/}).click()
+    await waitText(dialog,/校验失败/)
+    assert.equal(JSON.parse((await gql('{coreStatus}')).coreStatus).current,'dae')
+    await control('maintenance',{fail:''})
+    await dialog.getByRole('button',{name:/下载并安装 mihomo/}).click()
+    await waitText(dialog,/内核已安装/)
+    await dialog.getByRole('button',{name:'检查兼容性'}).click()
+    await waitText(dialog,/兼容性检查通过/)
+    await dialog.getByRole('button',{name:'切换到 mihomo'}).click()
+    await waitText(dialog,/切换完成，当前内核：mihomo/)
+    await page.screenshot({path:path.join(output,'desktop-mihomo.png'),fullPage:true})
+    for (const name of ['sing-box','dae']) {
+      await dialog.getByRole('button',{name,exact:true}).click()
+      await dialog.getByRole('button',{name:'检查兼容性'}).click()
+      await waitText(dialog,/兼容性检查通过/)
+      await dialog.getByRole('button',{name:`切换到 ${name}`}).click()
+      await waitText(dialog,new RegExp(`切换完成，当前内核：${name}`))
+    }
+    await control('core_fault',{engine:'mihomo',fail:true})
+    await dialog.getByRole('button',{name:'mihomo',exact:true}).click()
+    await dialog.getByRole('button',{name:'检查兼容性'}).click()
+    await waitText(dialog,/兼容性检查通过/)
+    await dialog.getByRole('button',{name:'切换到 mihomo'}).click()
+    await waitText(dialog,/已恢复原内核/)
+    assert.equal(JSON.parse((await gql('{coreStatus}')).coreStatus).current,'dae')
+    await control('core_fault',{engine:'mihomo',fail:false})
     assert.equal((await gql('{general{dae{modified}}}')).general.dae.modified, true)
     assert.equal((await control('compare')).unchanged, true)
     await checkManualLatency(page, context, false, path.join(output, 'desktop-manual-latency.png'))
@@ -193,6 +221,19 @@ async function checkManualLatency(page, context, touch, screenshot) {
     await frame.locator('[data-workspace="dashboard"]').waitFor({ timeout: 45000 })
     await frame.getByRole('button', { name: /代理内核 sing-box/ }).tap()
     await waitText(frame.getByRole('dialog'), /当前内核：sing-box/)
+    dialog=frame.getByRole('dialog')
+    await dialog.getByRole('button',{name:'mihomo',exact:true}).tap()
+    await dialog.getByRole('button',{name:'检查兼容性'}).tap()
+    await waitText(dialog,/兼容性检查通过/)
+    await dialog.getByRole('button',{name:'切换到 mihomo'}).tap()
+    await waitText(dialog,/切换完成，当前内核：mihomo/)
+    const mhBox=await dialog.boundingBox()
+    assert.ok(mhBox.x>=0 && mhBox.x+mhBox.width<=391,JSON.stringify(mhBox))
+    await page.screenshot({path:path.join(output,'mobile-mihomo.png'),fullPage:true})
+    await page.reload()
+    await frame.locator('[data-workspace="dashboard"]').waitFor({timeout:45000})
+    await frame.getByRole('button',{name:/代理内核 mihomo/}).tap()
+    await waitText(frame.getByRole('dialog'),/当前内核：mihomo/)
     await checkManualLatency(page, mobile, true, path.join(output, 'mobile-manual-latency.png'))
     assert.equal((await control('compare')).unchanged, true)
     assert.deepEqual(errors, [])
@@ -203,6 +244,9 @@ async function checkManualLatency(page, context, touch, screenshot) {
       pinnedCompatibilityCoreInstall: true,
       downloadFailureRetry: true,
       daeSingboxDae: true,
+      mihomoInstallSwitchRollback: true,
+      mihomoChecksumFailureRetry: true,
+      mobileMihomo: true,
       lateFailureRollback: true,
       allUserTablesPreserved: true,
       pendingEditsPreserved: true,

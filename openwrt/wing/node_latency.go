@@ -65,7 +65,7 @@ func TestLatencies(ctx context.Context, ids *[]graphql.ID) ([]*LatencyResolver, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, latencyRequestTimeout)
 	defer cancel()
-	if dae.RouterCoreName() == "sing-box" {
+	if dae.RouterCoreName() != "dae" {
 		return testSingBoxNodes(ctx, nodes)
 	}
 	option, err := latencyProbeOption(ctx)

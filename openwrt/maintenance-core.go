@@ -21,7 +21,7 @@ import (
 	"github.com/daeuniverse/dae-wing/routercore"
 )
 
-var coreMaintenanceCodes = []string{"extra_not_installed", "extra_dependency_failed", "extra_rollback_failed", "core_incompatible", "core_configuration_changed", "singbox_not_installed", "singbox_version_mismatch", "singbox_configuration_invalid", "core_environment_unsupported", "core_network_conflict", "core_rolled_back", "core_rollback_failed", "core_cleanup_failed", "core_stop_failed", "core_state_failed", "core_snapshot_failed", "core_start_failed", "core_not_ready", "core_connectivity_failed", "core_dependency_failed", "core_exited", "core_not_running", "nftables_unavailable"}
+var coreMaintenanceCodes = []string{"mihomo_not_installed", "mihomo_version_mismatch", "mihomo_configuration_invalid", "extra_not_installed", "extra_dependency_failed", "extra_rollback_failed", "core_incompatible", "core_configuration_changed", "singbox_not_installed", "singbox_version_mismatch", "singbox_configuration_invalid", "core_environment_unsupported", "core_network_conflict", "core_rolled_back", "core_rollback_failed", "core_cleanup_failed", "core_stop_failed", "core_state_failed", "core_snapshot_failed", "core_start_failed", "core_not_ready", "core_connectivity_failed", "core_dependency_failed", "core_exited", "core_not_running", "nftables_unavailable"}
 
 func coreMaintenanceCode(message string) string {
 	if message == "core_request_failed" {
@@ -48,7 +48,7 @@ func uncertainCoreJob(job maintenanceJob) bool {
 }
 func coreMaintenanceAction(action string) bool {
 	switch action {
-	case "core_check_dae", "core_check_singbox", "core_install_singbox", "core_install_extra", "core_switch_dae", "core_switch_singbox":
+	case "core_check_dae", "core_check_singbox", "core_check_mihomo", "core_install_singbox", "core_install_mihomo", "core_install_extra", "core_switch_dae", "core_switch_singbox", "core_switch_mihomo":
 		return true
 	}
 	return false
@@ -70,16 +70,22 @@ func (m *maintenanceManager) reconcileCoreJob(job *maintenanceJob) {
 	}
 }
 
+type optionalCoreStatus struct {
+	Installed bool   `json:"installed"`
+	Supported bool   `json:"supported"`
+	Version   string `json:"version"`
+}
 type coreMaintenanceStatus struct {
-	Current      string           `json:"current"`
-	Phase        string           `json:"phase"`
-	Code         string           `json:"code,omitempty"`
-	Installed    bool             `json:"installed"`
-	Supported    bool             `json:"supported"`
-	Version      string           `json:"version"`
-	Extra        bool             `json:"extra"`
-	ExtraVersion string           `json:"extra_version"`
-	Plan         *routercore.Plan `json:"plan,omitempty"`
+	Engines      map[string]optionalCoreStatus `json:"engines"`
+	Current      string                        `json:"current"`
+	Phase        string                        `json:"phase"`
+	Code         string                        `json:"code,omitempty"`
+	Installed    bool                          `json:"installed"`
+	Supported    bool                          `json:"supported"`
+	Version      string                        `json:"version"`
+	Extra        bool                          `json:"extra"`
+	ExtraVersion string                        `json:"extra_version"`
+	Plan         *routercore.Plan              `json:"plan,omitempty"`
 }
 type storedCorePlan struct {
 	Plan    routercore.Plan `json:"plan"`
@@ -103,6 +109,12 @@ func (m *maintenanceManager) coreStatus() *coreMaintenanceStatus {
 	if st, err := os.Lstat(m.corePath()); err == nil && st.Mode().IsRegular() && st.Mode().Perm()&0022 == 0 && st.Mode().Perm()&0111 != 0 {
 		status.Installed = true
 	}
+	_, mhSupported := routercore.MihomoReleases[runtime.GOARCH]
+	mhInstalled := false
+	if st, e := os.Lstat(m.mihomoPath()); e == nil && st.Mode().IsRegular() && st.Mode().Perm()&0022 == 0 && st.Mode().Perm()&0111 != 0 {
+		mhInstalled = true
+	}
+	status.Engines = map[string]optionalCoreStatus{"sing-box": {status.Installed, supported, routercore.SingBoxVersion}, "mihomo": {mhInstalled, mhSupported, routercore.MihomoVersion}}
 	var saved storedCorePlan
 	if readMaintenanceJSON(filepath.Join(m.stateDir, "core-plan.json"), &saved) == nil && m.now().Unix()-saved.Checked <= 600 && saved.Checked <= m.now().Unix()+60 {
 		status.Plan = &saved.Plan
@@ -118,12 +130,17 @@ func (m *maintenanceManager) maintainCore(ctx context.Context, job *maintenanceJ
 	if job.Action == "core_install_extra" {
 		return m.installExtra(ctx, job)
 	}
+	if job.Action == "core_install_mihomo" {
+		return m.installOptionalCore(ctx, job, "mihomo")
+	}
 	if job.Action == "core_install_singbox" {
 		return m.installSingBox(ctx, job)
 	}
 	target := "dae"
 	if strings.HasSuffix(job.Action, "singbox") {
 		target = "sing-box"
+	} else if strings.HasSuffix(job.Action, "mihomo") {
+		target = "mihomo"
 	}
 	job.Target = target
 	if strings.HasPrefix(job.Action, "core_check_") {
@@ -169,8 +186,30 @@ func (m *maintenanceManager) maintainCore(ctx context.Context, job *maintenanceJ
 	}
 	return nil
 }
+func (m *maintenanceManager) mihomoPath() string {
+	if m.mihomoBinary != "" {
+		return m.mihomoBinary
+	}
+	return routercore.MihomoBinaryPath
+}
 func (m *maintenanceManager) installSingBox(ctx context.Context, job *maintenanceJob) error {
-	release, ok := routercore.Releases[runtime.GOARCH]
+	return m.installOptionalCore(ctx, job, "sing-box")
+}
+func (m *maintenanceManager) installOptionalCore(ctx context.Context, job *maintenanceJob, engine string) error {
+	binary, version, releaseTag := m.corePath(), routercore.SingBoxVersion, routercore.SingBoxRelease
+	releases := routercore.Releases
+	versionArgs := []string{"version"}
+	prefix := "sing-box version " + version + "\n"
+	versionError := "singbox_version_mismatch"
+	if engine == "mihomo" {
+		binary, version, releaseTag = m.mihomoPath(), routercore.MihomoVersion, routercore.MihomoRelease
+		releases = routercore.MihomoReleases
+		versionArgs = []string{"-v"}
+		prefix = "Mihomo Meta v" + version + " "
+		versionError = "mihomo_version_mismatch"
+	}
+
+	release, ok := releases[runtime.GOARCH]
 	if !ok {
 		return errors.New("unsupported")
 	}
@@ -178,14 +217,14 @@ func (m *maintenanceManager) installSingBox(ctx context.Context, job *maintenanc
 	if err != nil {
 		return errors.New("unsafe_state")
 	}
-	if state.Current == "sing-box" {
+	if state.Current == engine {
 		return errors.New("busy")
 	}
-	if err = privateDirectory(filepath.Dir(m.corePath())); err != nil {
+	if err = privateDirectory(filepath.Dir(binary)); err != nil {
 		return errors.New("unsafe_state")
 	}
 	var stat syscall.Statfs_t
-	if err = syscall.Statfs(filepath.Dir(m.corePath()), &stat); err != nil || uint64(stat.Bavail)*uint64(stat.Bsize) < 180<<20 {
+	if err = syscall.Statfs(filepath.Dir(binary), &stat); err != nil || uint64(stat.Bavail)*uint64(stat.Bsize) < 180<<20 {
 		return errors.New("no_space")
 	}
 	directory, err := os.MkdirTemp(m.stateDir, "core-download-")
@@ -193,11 +232,11 @@ func (m *maintenanceManager) installSingBox(ctx context.Context, job *maintenanc
 		return errors.New("state_failed")
 	}
 	defer os.RemoveAll(directory)
-	archive := filepath.Join(directory, "sing-box.tar.gz")
+	archive := filepath.Join(directory, engine+".tar.gz")
 	if err = m.save(job, "downloading"); err != nil {
 		return err
 	}
-	address := "https://github.com/slobys/NaiLink/releases/download/" + routercore.SingBoxRelease + "/" + release.Archive
+	address := "https://github.com/slobys/NaiLink/releases/download/" + releaseTag + "/" + release.Archive
 	if err = m.fetch(ctx, address, archive, 128<<20); err != nil {
 		return errors.New("download_failed")
 	}
@@ -214,14 +253,14 @@ func (m *maintenanceManager) installSingBox(ctx context.Context, job *maintenanc
 	if err != nil || hex.EncodeToString(digest.Sum(nil)) != release.SHA256 {
 		return errors.New("checksum_failed")
 	}
-	target, err := os.CreateTemp(filepath.Dir(m.corePath()), ".sing-box-*")
+	target, err := os.CreateTemp(filepath.Dir(binary), ".native-*")
 	if err != nil {
 		return errors.New("state_failed")
 	}
 	path := target.Name()
 	target.Close()
 	defer os.Remove(path)
-	if err = extractSingboxPackage(archive, path); err != nil {
+	if err = extractNativePackage(archive, path, engine); err != nil {
 		return err
 	}
 	if err = validateSingboxELF(path, runtime.GOARCH); err != nil {
@@ -230,9 +269,9 @@ func (m *maintenanceManager) installSingBox(ctx context.Context, job *maintenanc
 	if err = os.Chmod(path, 0700); err != nil {
 		return errors.New("state_failed")
 	}
-	output, err := m.run(ctx, path, "version")
-	if err != nil || !strings.HasPrefix(string(output), "sing-box version "+routercore.SingBoxVersion+"\n") {
-		return errors.New("singbox_version_mismatch")
+	output, err := m.run(ctx, append([]string{path}, versionArgs...)...)
+	if err != nil || !strings.HasPrefix(string(output), prefix) {
+		return errors.New(versionError)
 	}
 	// Install only the optional kernel module, using the router's own package
 	// manager/feeds. Never replace a kernel or change feeds to force compatibility.
@@ -264,16 +303,57 @@ func (m *maintenanceManager) installSingBox(ctx context.Context, job *maintenanc
 	if err = os.Chmod(path, 0755); err != nil {
 		return errors.New("state_failed")
 	}
-	if err = os.Rename(path, m.corePath()); err != nil {
+	backup := ""
+	if engine == "mihomo" {
+		if info, e := os.Lstat(binary); e == nil {
+			if !info.Mode().IsRegular() {
+				return errors.New("unsafe_state")
+			}
+			backup = binary + ".previous-" + job.ID
+			if _, e = os.Lstat(backup); !os.IsNotExist(e) {
+				return errors.New("unsafe_state")
+			}
+			if e = os.Rename(binary, backup); e != nil {
+				return errors.New("state_failed")
+			}
+		} else if !os.IsNotExist(e) {
+			return errors.New("unsafe_state")
+		}
+	}
+	restore := func() error {
+		if engine != "mihomo" {
+			return nil
+		}
+		if backup != "" {
+			return os.Rename(backup, binary)
+		}
+		if e := os.Remove(binary); e != nil && !os.IsNotExist(e) {
+			return e
+		}
+		return nil
+	}
+	if err = os.Rename(path, binary); err != nil {
+		if restore() != nil {
+			return errors.New("core_rollback_failed")
+		}
 		return errors.New("state_failed")
 	}
-	parent, err := os.Open(filepath.Dir(m.corePath()))
+	parent, err := os.Open(filepath.Dir(binary))
 	if err != nil {
+		if restore() != nil {
+			return errors.New("core_rollback_failed")
+		}
 		return errors.New("state_failed")
 	}
 	defer parent.Close()
 	if err = parent.Sync(); err != nil {
+		if restore() != nil {
+			return errors.New("core_rollback_failed")
+		}
 		return errors.New("state_failed")
+	}
+	if backup != "" {
+		_ = os.Remove(backup)
 	}
 	return nil
 }
@@ -281,6 +361,9 @@ func (m *maintenanceManager) installSingBox(ctx context.Context, job *maintenanc
 // Use only the static binary from the checksum-pinned compatibility archive.
 // No service scripts or defaults are installed over NaiLink's configuration.
 func extractSingboxPackage(archive, destination string) error {
+	return extractNativePackage(archive, destination, "sing-box")
+}
+func extractNativePackage(archive, destination, engine string) error {
 	inner, err := os.CreateTemp(filepath.Dir(destination), ".core-payload-*")
 	if err != nil {
 		return errors.New("state_failed")
@@ -291,7 +374,7 @@ func extractSingboxPackage(archive, destination string) error {
 	if err = extractSingbox(archive, path, "data.tar.gz"); err != nil {
 		return err
 	}
-	return extractSingbox(path, destination, "./usr/bin/sing-box")
+	return extractSingbox(path, destination, "./usr/bin/"+engine)
 }
 func extractSingbox(archive, destination, wanted string) error {
 	f, err := os.Open(archive)

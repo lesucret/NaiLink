@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -151,16 +152,24 @@ func (m *routerCoreManager) plan(ctx context.Context, target string) routercore.
 	}
 	result.Nodes = len(conf.Node)
 	result.Groups = len(conf.Group)
-	result.Installed = target == "dae" || routerSingBoxInstalled()
-	result.Revision = routercore.Fingerprint([]any{current, target, conf, routerCurrentGeodataIdentity(m.dirs), result.Installed, routercore.SingBoxVersion, routercore.AdapterRevision, routerExtraIdentity()})
+	result.Installed = target == "dae" || target == "sing-box" && routerSingBoxInstalled() || target == "mihomo" && routerMihomoInstalled()
+	result.Revision = routercore.Fingerprint([]any{current, target, conf, routerCurrentGeodataIdentity(m.dirs), result.Installed, routercore.SingBoxVersion, routercore.AdapterRevision, routerExtraIdentity(), routercore.MihomoVersion})
 	var profile sbObject
 	if target == "dae" {
 		result.Problems = append(result.Problems, routerDaeNodeProblems(conf)...)
 	}
-	if target == "sing-box" {
+	if target != "dae" {
 		var warnings []string
 		var err error
-		profile, warnings, err = singBoxConfig(conf, m.dirs, sbPorts{Mixed: 39001, API: 39002, DNS: 39003, Secret: "configuration-check-only"}, !m.dry)
+		ports := sbPorts{Mixed: 39001, API: 39002, DNS: 39003, Secret: "configuration-check-only"}
+		profile, warnings, err = coreCanonicalConfig(conf, m.dirs, ports, !m.dry, target)
+		if err == nil && target == "mihomo" {
+			profile, err = mihomoFromCanonical(profile, conf, ports)
+			for i := range warnings {
+				warnings[i] = strings.ReplaceAll(warnings[i], "sing-box", "mihomo")
+			}
+			warnings = append(warnings, "mihomo 自动选择使用 URL 健康检查；DNS 策略由 NaiLink 私有转发器保留，不迁移原内核 DNS 缓存。")
+		}
 		result.Warnings = warnings
 		if err != nil {
 			var nodes sbNodeProblems
@@ -171,14 +180,18 @@ func (m *routerCoreManager) plan(ctx context.Context, target string) routercore.
 			}
 		}
 		if !result.Installed {
-			result.Problems = append(result.Problems, "singbox_not_installed")
+			if target == "mihomo" {
+				result.Problems = append(result.Problems, "mihomo_not_installed")
+			} else {
+				result.Problems = append(result.Problems, "singbox_not_installed")
+			}
 		}
 	}
 	if err := m.preflight(ctx, target); err != nil {
 		result.Problems = append(result.Problems, err.Error())
 	}
-	if len(result.Problems) == 0 && target == "sing-box" {
-		if err := routerCheckSingBoxProfile(ctx, profile); err != nil {
+	if len(result.Problems) == 0 && target != "dae" {
+		if err := routerCheckNativeProfile(ctx, profile, target); err != nil {
 			result.Problems = append(result.Problems, err.Error())
 		}
 	}
@@ -340,6 +353,12 @@ func (m *routerCoreManager) switchPrepared(ctx context.Context, target string, o
 		_ = m.save(pending, "failed")
 		return err
 	}
+	if err != nil {
+		code := err.Error()
+		if regexp.MustCompile(`^[a-z_]{1,64}$`).MatchString(code) {
+			m.log.WithFields(logrus.Fields{"target": target, "code": code}).Warn("Core candidate failed; restoring previous core")
+		}
+	}
 	rollbackCtx, cancel := context.WithTimeout(context.Background(), routerCoreStartTimeout(conf))
 	defer cancel()
 	restored, restoreErr := m.start(rollbackCtx, oldState.Current, conf)
@@ -366,24 +385,37 @@ func (m *routerCoreManager) startInitial(state routercore.State, conf *daeConfig
 	ctx, cancel := context.WithTimeout(context.Background(), routerCoreStartTimeout(conf))
 	initial, err := m.start(ctx, state.Current, conf)
 	cancel()
-	// An optional-core version migration must also recover when the previous
-	// journal entry records a same-core restart. The canonical config is still
-	// dae's; never leave an otherwise working installation in a respawn loop.
-	if err != nil && state.Current == "sing-box" && (state.Previous == "dae" || err.Error() == "singbox_version_mismatch") && err.Error() != "core_cleanup_failed" {
-		ctx, cancel = context.WithTimeout(context.Background(), routerCoreStartTimeout(conf))
-		initial, err = m.start(ctx, "dae", conf)
-		cancel()
-		if err == nil {
-			state.Current, state.Phase, state.Code = "dae", "rolled_back", "core_startup_rolled_back"
-			if saveErr := m.save(state, "ready"); saveErr != nil {
-				stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
-				_ = initial.Stop(stopCtx)
-				stopCancel()
-				return nil, state, saveErr
-			}
-		}
+	if err == nil || state.Current == "dae" || err.Error() == "core_cleanup_failed" {
+		return initial, state, err
 	}
-	return initial, state, err
+	failed := state.Current
+	candidates := []string{}
+	if routercore.ValidCore(state.Previous) && state.Previous != failed {
+		candidates = append(candidates, state.Previous)
+	}
+	if state.Previous != "dae" {
+		candidates = append(candidates, "dae")
+	}
+	for _, fallback := range candidates {
+		ctx, cancel = context.WithTimeout(context.Background(), routerCoreStartTimeout(conf))
+		initial, err = m.start(ctx, fallback, conf)
+		cancel()
+		if err != nil {
+			if err.Error() == "core_cleanup_failed" {
+				return nil, state, err
+			}
+			continue
+		}
+		state.Previous, state.Current, state.Target, state.Phase, state.Code = failed, fallback, "", "rolled_back", "core_startup_rolled_back"
+		if saveErr := m.save(state, "ready"); saveErr != nil {
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			_ = initial.Stop(stopCtx)
+			stopCancel()
+			return nil, state, saveErr
+		}
+		return initial, state, nil
+	}
+	return nil, state, err
 }
 
 func Run(log *logrus.Logger, conf *daeConfig.Config, dirs []string, disableTimestamp, dry bool) (err error) {
@@ -426,7 +458,7 @@ func Run(log *logrus.Logger, conf *daeConfig.Config, dirs []string, disableTimes
 			}
 			return newRouterDaeSession(log, c, dirs, disableTimestamp, dry), nil
 		}
-		return newRouterSingBoxSession(ctx, log, c, dirs, !dry)
+		return newRouterNativeSession(ctx, log, c, dirs, !dry, name)
 	}
 	routerCoreGlobal.Lock()
 	routerCoreGlobal.manager = m

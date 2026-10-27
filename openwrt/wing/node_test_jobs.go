@@ -197,7 +197,7 @@ func (j *latencyJob) run(ctx context.Context, nodes []db.Node) {
 	}()
 	option, err := latencyProbeOption(ctx)
 	if err == nil {
-		if j.status.Core == "sing-box" {
+		if j.status.Core != "dae" {
 			err = testSingBoxNodesProgress(ctx, nodes, func(r *LatencyResolver) { j.record(ctx, r) })
 		} else {
 			_, err = runLatencyProbes(ctx, nodes, func(ctx context.Context, n *db.Node) *LatencyResolver {

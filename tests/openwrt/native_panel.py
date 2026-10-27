@@ -32,6 +32,7 @@ def main():
     parser.add_argument("--maintenance-fixture", action="store_true", help="Use private trusted HTTPS/procd fixtures for online-update tests")
     parser.add_argument("--geodata-probe", type=Path, help="Test-only geodata fixture generator")
     parser.add_argument("--singbox-package", type=Path, help="Pinned official static package; run API-only daemon inside the disposable rootfs")
+    parser.add_argument("--mihomo-package",type=Path)
     args = parser.parse_args()
     if os.geteuid() != 0:
         parser.error("Run as root with an isolated, checksum-verified OpenWrt rootfs")
@@ -198,7 +199,7 @@ def main():
             time.sleep(0.05)
         if args.maintenance_fixture:
             from maintenance_fixture import MaintenanceFixture
-            maintenance = MaintenanceFixture(root, project, args.geodata_probe, args.singbox_package)
+            maintenance = MaintenanceFixture(root, project, args.geodata_probe, args.singbox_package, args.mihomo_package)
             namespace = maintenance.procd()
             namespace.maintenance_namespace = True
             processes.append(namespace)
@@ -218,12 +219,13 @@ def main():
                     result.write_text(json.dumps(answer))
                     break
                 if action == "core_fault" and args.singbox_package:
-                    managed=root/"usr/libexec/daed/cores/sing-box";backup=managed.with_name("sing-box.real")
+                    engine=request.get("engine","sing-box");assert engine in ("sing-box","mihomo")
+                    managed=root/("usr/libexec/daed/cores/"+engine);backup=managed.with_name(engine+".real")
                     state_file=root/"etc/daed/cores/state.json"
                     if state_file.exists() and json.loads(state_file.read_text()).get('current')!='dae':raise ValueError('Fault injection requires inactive optional core')
                     if request.get('fail'):
                         if backup.exists():raise ValueError('Fault already installed')
-                        managed.rename(backup);managed.write_text('#!/bin/sh\ncase "$1" in version|check) exec /usr/libexec/daed/cores/sing-box.real "$@" ;; *) exit 77 ;; esac\n');managed.chmod(0o755)
+                        managed.rename(backup);managed.write_text('#!/bin/sh\ncase "$1" in '+('version|check' if engine=='sing-box' else '-v|-t')+') exec /usr/libexec/daed/cores/'+engine+'.real "$@" ;; *) exit 77 ;; esac\n');managed.chmod(0o755)
                     else:backup.replace(managed)
                 elif action == "compare":
                     answer["unchanged"]=snapshot()==baseline
@@ -273,7 +275,7 @@ def main():
                         if not re.fullmatch(r"0\.6\.(99|100|101)",request['next']): raise ValueError('Invalid future fixture version')
                         maintenance.state['next'] = request['next']
                     if "fail" in request:
-                        if request["fail"] not in ("", "download", "checksum", "invalid_geodata", "install"): raise ValueError("Invalid fixture failure mode")
+                        if request["fail"] not in ("", "download", "checksum", "invalid_geodata", "install", "core_checksum"): raise ValueError("Invalid fixture failure mode")
                         maintenance.state["fail"] = request["fail"]
                     if request.get("bump"):
                         maintenance.state["geo"] = str(int(maintenance.state["geo"]) + 1)

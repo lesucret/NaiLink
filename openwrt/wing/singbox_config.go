@@ -40,6 +40,9 @@ type sbNodeProblems []string
 func (p sbNodeProblems) Error() string { return strings.Join(p, "；") }
 
 func singBoxNodeOutbounds(conf *daeConfig.Config) ([]sbObject, map[string]bool, []string, sbNodeProblems) {
+	return nativeNodeOutbounds(conf, "sing-box")
+}
+func nativeNodeOutbounds(conf *daeConfig.Config, engine string) ([]sbObject, map[string]bool, []string, sbNodeProblems) {
 	outbounds := []sbObject{{"type": "direct", "tag": "direct"}}
 	names := map[string]bool{}
 	var warnings []string
@@ -68,9 +71,16 @@ func singBoxNodeOutbounds(conf *daeConfig.Config) ([]sbObject, map[string]bool, 
 		if conf.Global.TlsImplementation == "utls" {
 			fingerprint = conf.Global.UtlsImitate
 		}
-		out, err := routercore.Node(link, "node:"+name, routercore.NodeOptions{AllowInsecure: conf.Global.AllowInsecure, UTLS: fingerprint,
+		out, err := routerParseCoreNode(engine, link, "node:"+name, routercore.NodeOptions{AllowInsecure: conf.Global.AllowInsecure, UTLS: fingerprint,
 			Warn: func(message string) { warnings = append(warnings, label+"："+message) },
 		})
+		if err == nil && engine == "mihomo" {
+			for _, node := range routercore.ExpandNode(out) {
+				if _, err = routercore.MihomoNode(node); err != nil {
+					break
+				}
+			}
+		}
 		if err != nil {
 			problems = append(problems, label+"："+routercore.DescribeError(err))
 			continue
@@ -91,14 +101,17 @@ func coreOutbound(name string) (string, error) {
 	}
 	return "group:" + name, nil
 }
-func singBoxConfig(conf *daeConfig.Config, dirs []string, ports sbPorts, transparent bool) (output sbObject, reports []string, failure error) {
+func singBoxConfig(conf *daeConfig.Config, dirs []string, ports sbPorts, transparent bool) (sbObject, []string, error) {
+	return coreCanonicalConfig(conf, dirs, ports, transparent, "sing-box")
+}
+func coreCanonicalConfig(conf *daeConfig.Config, dirs []string, ports sbPorts, transparent bool, engine string) (output sbObject, reports []string, failure error) {
 	c := &sbConverter{conf: conf, dirs: dirs, geo: map[string]string{}}
 	defer func() {
 		if reports == nil {
 			reports = c.warnings
 		}
 	}()
-	outbounds, nodeNames, warnings, nodeProblems := singBoxNodeOutbounds(conf)
+	outbounds, nodeNames, warnings, nodeProblems := nativeNodeOutbounds(conf, engine)
 	c.warnings = warnings
 	if len(nodeProblems) > 0 {
 		return nil, c.warnings, nodeProblems

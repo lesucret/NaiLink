@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 
 class MaintenanceFixture:
-    def __init__(self, root, project, probe, singbox_package=None):
+    def __init__(self, root, project, probe, singbox_package=None, mihomo_package=None):
         self.root = root
         self.state = {"next": "0.6.99", "geo": "20261025", "fail": "", "requests": []}
         fixture = root / "tmp/maintenance-https"
@@ -29,6 +29,10 @@ class MaintenanceFixture:
                     return
                 if singbox_package and path == "/slobys/NaiLink/releases/download/openwrt-v0.6.35/nailink-sing-box-1.14.3-nailink.1-x86_64.tar.gz":
                     data=singbox_package.read_bytes()
+                    self.send_response(200);self.send_header("Content-Length",str(len(data)));self.end_headers();self.wfile.write(data);return
+                if mihomo_package and path == "/slobys/NaiLink/releases/download/openwrt-v0.6.40/nailink-mihomo-1.19.33-x86_64.tar.gz":
+                    data=mihomo_package.read_bytes()
+                    if outer.state['fail']=='core_checksum':data=data[:-16]+b'corrupted-footer'
                     self.send_response(200);self.send_header("Content-Length",str(len(data)));self.end_headers();self.wfile.write(data);return
                 version = outer.state["next"]
                 tag = "openwrt-v" + version

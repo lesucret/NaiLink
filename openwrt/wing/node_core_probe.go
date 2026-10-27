@@ -9,6 +9,7 @@ import (
 )
 
 func testSingBoxNodes(ctx context.Context, nodes []db.Node) ([]*LatencyResolver, error) {
+	engine := dae.RouterCoreName()
 	values := make([]*LatencyResolver, len(nodes))
 	indices := map[uint]int{}
 	for i, n := range nodes {
@@ -20,7 +21,7 @@ func testSingBoxNodes(ctx context.Context, nodes []db.Node) ([]*LatencyResolver,
 		values[indices[r.NodeID]] = r
 		lock.Unlock()
 		if ctx.Err() == nil {
-			storeCoreLatencyResults("sing-box", []*LatencyResolver{r})
+			storeCoreLatencyResults(engine, []*LatencyResolver{r})
 		}
 	})
 	return values, err

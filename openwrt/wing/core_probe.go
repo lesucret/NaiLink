@@ -221,7 +221,15 @@ func routerProbeConfiguration(links []string, global daeConfig.Global) (*daeConf
 		if global.TlsImplementation == "utls" {
 			fingerprint = global.UtlsImitate
 		}
-		if _, err := routercore.Node(link, "node:"+name, routercore.NodeOptions{AllowInsecure: global.AllowInsecure, UTLS: fingerprint}); err != nil {
+		node, err := routerParseCoreNode(RouterCoreName(), link, "node:"+name, routercore.NodeOptions{AllowInsecure: global.AllowInsecure, UTLS: fingerprint})
+		if err == nil && RouterCoreName() == "mihomo" {
+			for _, out := range routercore.ExpandNode(node) {
+				if _, err = routercore.MihomoNode(out); err != nil {
+					break
+				}
+			}
+		}
+		if err != nil {
 			results[i] = RouterCoreProbe{Message: err.Error(), Tested: time.Now()}
 			continue
 		}
@@ -237,7 +245,7 @@ func routerStartProbe(ctx context.Context, conf *daeConfig.Config, hooks ...logr
 	for _, hook := range hooks {
 		log.AddHook(hook)
 	}
-	session, err := newRouterSingBoxSession(ctx, log, conf, nil, false, func(profile sbObject, ports sbPorts) {
+	session, err := newRouterNativeSession(ctx, log, conf, nil, false, RouterCoreName(), func(profile sbObject, ports sbPorts) {
 		users := []sbObject{{"username": "nailink", "password": ports.Secret}}
 		var rules []sbObject
 		for _, group := range conf.Group {
@@ -288,7 +296,13 @@ func ProbeRouterCoreNodesProgress(ctx context.Context, links []string, global da
 				tor = tor || kind == "tor"
 			}
 		}
-		if needs {
+		if RouterCoreName() == "mihomo" {
+			needs, tor = false, false
+			for _, out := range routercore.ExpandNode(node) {
+				needs = needs || routercore.NativeFeature(out) == "wireguard"
+			}
+		}
+		if needs && RouterCoreName() != "mihomo" {
 			if _, err := routercore.ExtraDirectory(routerExtraRoot); err != nil {
 				results[i] = RouterCoreProbe{Tested: time.Now(), Message: "extra_not_installed"}
 				if report != nil {
@@ -389,7 +403,7 @@ func probeRouterCoreNodesProgress(ctx context.Context, links []string, global da
 	if err != nil {
 		// Native validation can reject an option not checked by the adapter.
 		// Isolate such nodes instead of failing every valid node in the job.
-		if err.Error() == "singbox_configuration_invalid" && ctx.Err() == nil {
+		if (err.Error() == "singbox_configuration_invalid" || err.Error() == "mihomo_configuration_invalid") && ctx.Err() == nil {
 			if len(links) > 1 {
 				middle := len(links) / 2
 				var left, right []RouterCoreProbe

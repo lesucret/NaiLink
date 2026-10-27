@@ -54,7 +54,7 @@ func TestNodeUDP(parent context.Context, id graphql.ID) (*UDPTestResolver, error
 	if err != nil {
 		return nil, fmt.Errorf("invalid global configuration")
 	}
-	if dae.RouterCoreName() == "sing-box" {
+	if dae.RouterCoreName() != "dae" {
 		value, probeErr := dae.ProbeRouterCoreUDP(ctx, nodes[0].Link, parsed.Global)
 		if probeErr != nil {
 			return nil, fmt.Errorf("sing-box UDP test unavailable")

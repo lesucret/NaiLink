@@ -53,6 +53,11 @@ func ProblemText(code string) string {
 }
 
 var problemMessages = map[string]string{
+	"mihomo_protocol_unsupported": "此协议暂未适配 mihomo，请保留节点并选择其他内核",
+	"mihomo_option_unsupported":   "节点参数尚不能等价转换为 mihomo，原参数保留",
+	"mihomo_rule_unsupported":     "路由匹配不能安全转换为 mihomo，原规则保留",
+	"mihomo_dns_unsupported":      "DNS 规则不能安全转换为 mihomo，原配置保留",
+
 	"invalid_naive_concurrency":  "Naive 并发连接参数必须为 0 至 4，避免过多连接占用资源",
 	"unsupported_naive_insecure": "Naive / Cronet 不支持跳过证书验证，请配置正确证书或内联 CA",
 

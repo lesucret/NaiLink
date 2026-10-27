@@ -14,7 +14,7 @@ import (
 
 const SingBoxVersion = "1.14.3-nailink.1"
 const SingBoxRelease = "openwrt-v0.6.35"
-const AdapterRevision = 7
+const AdapterRevision = 8
 const BinaryPath = "/usr/libexec/daed/cores/sing-box"
 const TunName = "nailink0"
 
@@ -45,7 +45,7 @@ type Plan struct {
 	Groups     int      `json:"groups"`
 }
 
-func ValidCore(name string) bool { return name == "dae" || name == "sing-box" }
+func ValidCore(name string) bool { return name == "dae" || name == "sing-box" || name == "mihomo" }
 func Root(config string) string  { return filepath.Join(config, "cores") }
 
 // Never follow substituted private state directories or files.

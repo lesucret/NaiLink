@@ -7,7 +7,7 @@ set -eu
 umask 077
 
 REPOSITORY=slobys/NaiLink
-release=openwrt-v0.6.39
+release=openwrt-v0.6.40
 asset_dir=''
 mode=install
 action=install
@@ -349,7 +349,7 @@ uninstall_daed() {
 	rm -f /etc/config/daed /etc/config/daed.apk-new /etc/config/daed.opkg-dist /etc/init.d/daed /usr/bin/daed /usr/sbin/daed-router-setup /usr/sbin/nailink
 	rm -f /usr/libexec/daed/check /usr/libexec/daed/btf-probe /usr/share/daed-router/version
 	rm -rf /usr/libexec/daed/components
-	rm -f /usr/libexec/daed/cores/sing-box
+	rm -f /usr/libexec/daed/cores/sing-box /usr/libexec/daed/cores/mihomo /usr/libexec/daed/cores/mihomo.previous-*
 	rmdir /usr/libexec/daed/cores 2>/dev/null || :
 	rm -f /usr/libexec/daed/luci-proxy /www/cgi-bin/daed-router
 	for link in /etc/rc.d/[SK][0-9][0-9]daed; do [ ! -L "$link" ] || rm -f "$link"; done

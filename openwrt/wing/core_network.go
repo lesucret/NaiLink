@@ -27,6 +27,7 @@ func routerCoreAllRoutes() ([]netlink.Route, error) {
 }
 
 type routerCoreNetworkOwner struct {
+	Core           string `json:"core,omitempty"`
 	Config         string `json:"config"`
 	PID            int    `json:"pid"`
 	Started        string `json:"started"`
@@ -106,6 +107,34 @@ func routerRecordRedirectTable(root string) error {
 	if err != nil {
 		return err
 	}
+	if owner.Core == "mihomo" {
+		// MetaCubeX sing-tun v0.4.28 does not create the SagerNet random
+		// loopback redirect table. Require its own TUN route and nft table.
+		routes, e := routerCoreAllRoutes()
+		if e != nil {
+			return errors.New("core_network_check_failed")
+		}
+		link, e := netlink.LinkByName(routercore.TunName)
+		if e != nil {
+			return errors.New("core_not_ready")
+		}
+		found := false
+		for _, r := range routes {
+			if r.Table == 20340 && r.LinkIndex == link.Attrs().Index {
+				found = true
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		families, e := routerNftTablesFor(ctx, "mihomo")
+		if e != nil {
+			return e
+		}
+		if !found || len(families) == 0 {
+			return errors.New("core_not_ready")
+		}
+		return nil
+	}
 	if owner.RedirectTable != 0 {
 		return nil
 	}
@@ -118,7 +147,7 @@ func routerRecordRedirectTable(root string) error {
 		return err
 	}
 	if table == 0 {
-		return errors.New("core_network_ownership_failed")
+		return errors.New("core_not_ready")
 	}
 	owner.RedirectTable = table
 	data, _ := json.Marshal(owner)
@@ -142,6 +171,9 @@ func routerProcessStart(pid int) string {
 	return fields[19]
 }
 func routerNftTables(ctx context.Context) ([]string, error) {
+	return routerNftTablesFor(ctx, "sing-box")
+}
+func routerNftTablesFor(ctx context.Context, table string) ([]string, error) {
 	command := exec.CommandContext(ctx, "nft", "-j", "list", "tables")
 	var output routerCoreBoundedWriter
 	command.Stdout = &output
@@ -159,7 +191,7 @@ func routerNftTables(ctx context.Context) ([]string, error) {
 	}
 	var families []string
 	for _, entry := range reply.Nftables {
-		if entry.Table != nil && entry.Table.Name == "sing-box" {
+		if entry.Table != nil && entry.Table.Name == table {
 			switch entry.Table.Family {
 			case "inet", "ip", "ip6":
 				families = append(families, entry.Table.Family)
@@ -180,11 +212,16 @@ func routerCheckNetworkAvailable(ctx context.Context) error {
 	if _, err := os.Lstat("/etc/nftables.d/0-sing-box-auto-redirect.nft"); err == nil || !os.IsNotExist(err) {
 		return errors.New("core_network_conflict")
 	}
-	families, err := routerNftTables(ctx)
-	if err != nil {
-		return err
+	for _, table := range []string{"sing-box", "mihomo"} {
+		families, err := routerNftTablesFor(ctx, table)
+		if err != nil {
+			return err
+		}
+		if len(families) > 0 {
+			return errors.New("core_network_conflict")
+		}
 	}
-	if len(families) > 0 {
+	if _, err := os.Lstat("/etc/nftables.d/0-mihomo-auto-redirect.nft"); err == nil || !os.IsNotExist(err) {
 		return errors.New("core_network_conflict")
 	}
 	rules, err := netlink.RuleList(netlink.FAMILY_ALL)
@@ -207,7 +244,10 @@ func routerCheckNetworkAvailable(ctx context.Context) error {
 	}
 	return nil
 }
-func routerClaimSingboxNetwork(root, config string) (result error) {
+func routerClaimSingboxNetwork(root, config string) error {
+	return routerClaimNativeNetwork(root, config, "sing-box")
+}
+func routerClaimNativeNetwork(root, config, engine string) (result error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if _, err := os.Lstat(routerOwnerPath(root)); err == nil || !os.IsNotExist(err) {
@@ -216,7 +256,7 @@ func routerClaimSingboxNetwork(root, config string) (result error) {
 	if err := routerCheckNetworkAvailable(ctx); err != nil {
 		return err
 	}
-	owner := routerCoreNetworkOwner{Config: config, BootID: routerBootID()}
+	owner := routerCoreNetworkOwner{Core: engine, Config: config, BootID: routerBootID()}
 	if owner.BootID == "" {
 		return errors.New("core_environment_unsupported")
 	}
@@ -288,7 +328,7 @@ func routerReadNetworkOwner(root string) (routerCoreNetworkOwner, error) {
 	if err != nil {
 		return owner, err
 	}
-	if json.Unmarshal(data, &owner) != nil || owner.PID < 0 {
+	if json.Unmarshal(data, &owner) != nil || owner.PID < 0 || owner.Core != "" && owner.Core != "sing-box" && owner.Core != "mihomo" {
 		return owner, errors.New("unsafe_core_state")
 	}
 	relative, err := filepath.Rel(routerCoreRuntimeDir, owner.Config)
@@ -322,12 +362,12 @@ func routerRecoverSingboxNetwork(root string) error {
 			binary, _ := os.Readlink(fmt.Sprintf("/proc/%d/exe", owner.PID))
 			configFound := false
 			for i := range values {
-				if i > 0 && values[i-1] == "-c" && values[i] == owner.Config {
+				if i > 0 && (values[i-1] == "-c" && owner.Core != "mihomo" || values[i-1] == "-f" && owner.Core == "mihomo") && values[i] == owner.Config {
 					configFound = true
 				}
 			}
 			group, groupErr := syscall.Getpgid(owner.PID)
-			if !routerManagedSingBoxProgram(binary) || !configFound || groupErr != nil || group != owner.PID {
+			if !(owner.Core == "mihomo" && binary == routerMihomoBinary || owner.Core != "mihomo" && routerManagedSingBoxProgram(binary)) || !configFound || groupErr != nil || group != owner.PID {
 				return errors.New("core_process_ownership_failed")
 			}
 			_ = syscall.Kill(-owner.PID, syscall.SIGTERM)
@@ -377,12 +417,16 @@ func routerReleaseSingboxNetwork(root string) error {
 	if err = routerClearCoreFW4(ctx); err != nil {
 		return err
 	}
-	families, err := routerNftTables(ctx)
+	table := "sing-box"
+	if owner.Core == "mihomo" {
+		table = "mihomo"
+	}
+	families, err := routerNftTablesFor(ctx, table)
 	if err != nil {
 		return err
 	}
 	for _, family := range families {
-		if err = exec.CommandContext(ctx, "nft", "delete", "table", family, "sing-box").Run(); err != nil {
+		if err = exec.CommandContext(ctx, "nft", "delete", "table", family, table).Run(); err != nil {
 			return errors.New("core_cleanup_failed")
 		}
 	}
@@ -445,4 +489,42 @@ func routerManagedSingBoxProgram(path string) bool {
 	}
 	directory, err := routercore.ExtraDirectory(routerExtraRoot)
 	return err == nil && path == filepath.Join(directory, "sing-box")
+}
+
+// Read the real WAN from the main table, never RouteGet through the active
+// managed TUN. A private test core has no interface monitor of its own.
+func routerMainWANInterface() (string, error) {
+	for _, family := range []int{netlink.FAMILY_V4, netlink.FAMILY_V6} {
+		routes, e := netlink.RouteListFiltered(family, &netlink.Route{Table: 254}, netlink.RT_FILTER_TABLE)
+		if e != nil {
+			return "", errors.New("core_network_check_failed")
+		}
+		best, index := int(^uint(0)>>1), 0
+		for _, r := range routes {
+			if r.Dst != nil {
+				if ones, _ := r.Dst.Mask.Size(); ones != 0 {
+					continue
+				}
+			}
+			if r.LinkIndex <= 0 || r.Type != syscall.RTN_UNICAST {
+				continue
+			}
+			link, e := netlink.LinkByIndex(r.LinkIndex)
+			if e != nil || link.Attrs().Name == routercore.TunName || link.Attrs().Flags&net.FlagLoopback != 0 {
+				continue
+			}
+			if r.Priority < best {
+				best, index = r.Priority, r.LinkIndex
+			} else if r.Priority == best && index != r.LinkIndex {
+				return "", errors.New("unsupported_multi_wan")
+			}
+		}
+		if index > 0 {
+			link, e := netlink.LinkByIndex(index)
+			if e == nil {
+				return link.Attrs().Name, nil
+			}
+		}
+	}
+	return "", errors.New("core_network_check_failed")
 }

@@ -59,7 +59,13 @@ export function NodeProtocolGuide({ opened }: { opened: boolean }) {
       {query.data?.current === 'sing-box' && (
         <p className="mt-2 text-muted-foreground">
           支持普通链接、sing-box 单个出站或 endpoint JSON，以及封闭的 outbounds / endpoints 组合。Naive、WireGuard、Tor
-          需先在代理内核窗口安装扩展协议包。原生 JSON 节点仅供 sing-box 使用。
+          需先在代理内核窗口安装扩展协议包。JSON 节点切换到其他内核时会逐项检查，不能等价转换的参数会阻止切换。
+        </p>
+      )}
+      {query.data?.current === 'mihomo' && (
+        <p className="mt-2 text-muted-foreground">
+          支持列出的普通链接，以及能安全转换的 sing-box 出站 JSON。暂不接受完整 Clash YAML；Naive、Tor、Juicity
+          和部分高级参数不能转换时会明确提示，原节点保留。
         </p>
       )}
       {!!current?.protocols.some((p) => !p.available) && (

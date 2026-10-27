@@ -68,7 +68,7 @@ type maintenanceStatus struct {
 }
 type maintenanceManager struct {
 	stateDir, configDir, versionFile, lockFile, installLock, initScript string
-	coreBinary, extraRoot                                               string
+	coreBinary, mihomoBinary, extraRoot                                               string
 	fetch                                                               func(context.Context, string, string, int64) error
 	run                                                                 func(context.Context, ...string) ([]byte, error)
 	graph                                                               func(context.Context, string, any) error
@@ -665,7 +665,7 @@ func maintenanceCLI(command, configDir, jobID string) {
 	switch command {
 	case "status":
 		json.NewEncoder(os.Stdout).Encode(manager.status())
-	case "check", "update", "geodata", "core_check_dae", "core_check_singbox", "core_install_singbox", "core_install_extra", "core_switch_dae", "core_switch_singbox":
+	case "check", "update", "geodata", "core_check_dae", "core_check_singbox", "core_check_mihomo", "core_install_singbox", "core_install_mihomo", "core_install_extra", "core_switch_dae", "core_switch_singbox", "core_switch_mihomo":
 		json.NewEncoder(os.Stdout).Encode(manager.start(command))
 	case "worker":
 		if !regexp.MustCompile(`^[a-f0-9]{24}$`).MatchString(jobID) {

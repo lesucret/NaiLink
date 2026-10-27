@@ -197,3 +197,55 @@ func TestExtraArchiveAndFailedUpdatePreserveExisting(t *testing.T) {
 		t.Fatal("staging leaked")
 	}
 }
+
+func TestMihomoArchiveAndFailurePreserveExisting(t *testing.T) {
+	archive := os.Getenv("DAED_TEST_MIHOMO_ARCHIVE")
+	if archive == "" {
+		t.Skip("provide reviewed static Mihomo archive")
+	}
+	m := maintenanceFixture(t)
+	m.mihomoBinary = filepath.Join(t.TempDir(), "core", "mihomo")
+	db := filepath.Join(m.configDir, "wing.db")
+	os.WriteFile(db, []byte("all user nodes and configuration"), 0600)
+	m.fetch = func(_ context.Context, address, dest string, _ int64) error {
+		if address != "https://github.com/slobys/NaiLink/releases/download/"+routercore.MihomoRelease+"/"+routercore.MihomoReleases["amd64"].Archive {
+			t.Fatal("unexpected origin", address)
+		}
+		data, e := os.ReadFile(archive)
+		if e != nil {
+			return e
+		}
+		return os.WriteFile(dest, data, 0600)
+	}
+	m.run = func(ctx context.Context, args ...string) ([]byte, error) {
+		if args[0] == "modprobe" || args[0] == m.initScript {
+			return nil, nil
+		}
+		return maintenanceCommand(ctx, args...)
+	}
+	result := runFixtureJob(t, m, "core_install_mihomo")
+	if result.Job.State != "success" || !result.Cores.Engines["mihomo"].Installed {
+		t.Fatal(result.Job)
+	}
+	before, e := os.ReadFile(m.mihomoPath())
+	if e != nil {
+		t.Fatal(e)
+	}
+	m.fetch = func(_ context.Context, _, dest string, _ int64) error {
+		return os.WriteFile(dest, []byte("truncated"), 0600)
+	}
+	result = runFixtureJob(t, m, "core_install_mihomo")
+	if result.Job.State != "error" || result.Job.Code != "checksum_failed" {
+		t.Fatal(result.Job)
+	}
+	after, _ := os.ReadFile(m.mihomoPath())
+	if string(before) != string(after) {
+		t.Fatal("failed download replaced old core")
+	}
+	if data, _ := os.ReadFile(db); string(data) != "all user nodes and configuration" {
+		t.Fatal("user configuration changed")
+	}
+	if files, _ := filepath.Glob(filepath.Join(m.stateDir, "core-download-*")); len(files) != 0 {
+		t.Fatal("download staging leaked")
+	}
+}

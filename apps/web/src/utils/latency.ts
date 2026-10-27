@@ -38,7 +38,8 @@ export function formatLatencyLabel(result: NodeLatencyProbeResult | undefined, t
     return undefined
   }
   if (result.alive === false) {
-    if (result.message === 'unsupported_protocol') return t('latency.nodeFailure.protocol')
+    if (result.message === 'unsupported_protocol' || result.message === 'mihomo_protocol_unsupported')
+      return t('latency.nodeFailure.protocol')
     if (result.message === 'invalid_ech_public_name') return t('latency.nodeFailure.ech')
     // Native adapter failures happen before a network request. Keep them
     // distinct from line timeouts without echoing arbitrary backend text.
@@ -51,6 +52,9 @@ export function formatLatencyLabel(result: NodeLatencyProbeResult | undefined, t
     }
     const reasons = {
       extra_not_installed: 'extension',
+      mihomo_option_unsupported: 'invalidNode',
+      mihomo_configuration_invalid: 'invalidNode',
+      mihomo_not_installed: 'extension',
       tor_bootstrap_failed: 'torBootstrap',
       invalid_node: 'invalidNode',
       dns_failed: 'dns',

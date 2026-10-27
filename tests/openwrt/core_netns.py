@@ -114,8 +114,10 @@ def inside(args):
     run("mount","--bind",daemon_cgroup,"/sys/fs/cgroup")
     private=Path("/usr/libexec/daed");(private/"cores").mkdir(parents=True,mode=0o700)
     shutil.copy2(args.singbox,private/"cores/sing-box");os.chmod(private/"cores/sing-box",0o755)
+    if args.mihomo:
+        shutil.copy2(args.mihomo,private/"cores/mihomo");os.chmod(private/"cores/mihomo",0o755)
     shutil.copy2(args.probe,private/"btf-probe")
-    (private/"check").write_text('#!/bin/sh\nset -e\ncase "$2" in\n dae) exec /usr/libexec/daed/btf-probe --kernel ;;\n sing-box) test -c /dev/net/tun; exec nft -j list tables ;;\n *) exit 1 ;;\nesac\n')
+    (private/"check").write_text('#!/bin/sh\nset -e\ncase "$2" in\n dae) exec /usr/libexec/daed/btf-probe --kernel ;;\n sing-box|mihomo) test -c /dev/net/tun; exec nft -j list tables ;;\n *) exit 1 ;;\nesac\n')
     os.chmod(private/"check",0o755)
     run("nft","add","table","inet","unrelated_sentinel")
     if args.fw4:
@@ -173,8 +175,10 @@ subprocess.run(['nft','-f','-'],input=body.encode(),check=True)
     try:
         wait_ready();token=gql('mutation{createUser(username:"fixture",password:"fixture-password123")}')["createUser"]
         global_input='lanInterface:["lan0"],wanInterface:["wan0"],tcpCheckUrl:["http://probe.test:8080/generate_204","203.0.113.80"],udpCheckDns:["198.51.100.53:53","198.51.100.53"],bootstrapResolver:"198.51.100.53:53",fallbackResolver:"198.51.100.53:53",disableWaitingNetwork:true,autoConfigKernelParameter:true,checkInterval:"600s",logLevel:"debug"'
+        if args.target_core=='mihomo':global_input=global_input.replace('wanInterface:["wan0"]','wanInterface:["auto"]')
         cid=gql('mutation{createConfig(name:"Core fixture",global:{'+global_input+'}){id}}')["createConfig"]["id"]
         dns="upstream { test: 'udp://198.51.100.53:53' }\nrouting { request { fallback: test } }"
+        if args.target_core=='mihomo':dns="upstream { domestic: 'udp://198.51.100.53:53'\n foreignTcp: 'tcp://198.51.100.53:53'\n foreignUdp: 'udp://198.51.100.53:53' }\nrouting { request { qname(full:ai.test,full:ai6.test) -> foreignTcp\nqname(full:probe.test,full:probe6.test) -> foreignUdp\nfallback: domestic } }"
         did=gql('mutation{createDns(name:"Core DNS",dns:'+json.dumps(dns)+'){id}}')["createDns"]["id"]
         routing="dip(10.82.0.0/24) -> direct\ndomain(full:ai.test,full:ai6.test) -> AI\nfallback: proxy"
         rid=gql('mutation{createRouting(name:"Core route",routing:'+json.dumps(routing)+'){id}}')["createRouting"]["id"]
@@ -219,10 +223,10 @@ subprocess.run(['nft','-f','-'],input=body.encode(),check=True)
         gql('mutation{updateConfig(id:'+json.dumps(cid)+',global:{checkInterval:"601s"}){id}}')
         before=digest_database(config/"wing.db")
         original_rules=run('ip','-j','rule')
-        plan=json.loads(gql('{corePlan(target:"sing-box")}')["corePlan"]);assert plan["compatible"],plan
-        gql('mutation{switchCore(target:"sing-box",revision:'+json.dumps(plan["revision"])+')}')
+        plan=json.loads(gql('{corePlan(target:"'+args.target_core+'")}')["corePlan"]);assert plan["compatible"],plan
+        gql('mutation{switchCore(target:"'+args.target_core+'",revision:'+json.dumps(plan["revision"])+')}')
         assert gql('{nodeLatencies(ids:'+json.dumps(node_ids)+'){alive}}')['nodeLatencies']==[], 'results from the previous core leaked'
-        traffic("sing-box");assert digest_database(config/"wing.db")==before,"switch modified user tables"
+        traffic(args.target_core);assert digest_database(config/"wing.db")==before,"switch modified user tables"
         for device, direction in [('lan0', 'ingress'), ('wan0', 'egress')]:
             filters = json.loads(run('tc', '-j', 'filter', 'show', 'dev', device, direction))
             assert not any(item.get('kind') == 'bpf' for item in filters), 'previous dae capture remained attached'
@@ -231,7 +235,7 @@ subprocess.run(['nft','-f','-'],input=body.encode(),check=True)
         if args.fw4:
             assert Path('/etc/nftables.d/0-nailink-core.nft').is_file()
             assert not Path('/etc/nftables.d/0-sing-box-auto-redirect.nft').exists()
-            run('fw4','reload');traffic('sing-box after fw4 reload')
+            run('fw4','reload');traffic(args.target_core+' after fw4 reload')
             table=json.loads(run('nft','-j','list','table','inet','fw4'))
             policies={entry['chain']['name']:entry['chain'].get('policy') for entry in table['nftables'] if 'chain' in entry}
             assert policies['input']==policies['forward']=='drop',policies
@@ -241,8 +245,19 @@ subprocess.run(['nft','-f','-'],input=body.encode(),check=True)
             if state.get('code')=='core_restarted' and state['phase']=='stable':break
             time.sleep(.1)
         else:raise AssertionError('core was not recovered')
-        traffic('sing-box after unexpected exit')
-        run('ip','link','set','wan0','down');time.sleep(.4);run('ip','link','set','wan0','up');time.sleep(.6);traffic('sing-box after WAN recovery')
+        traffic(args.target_core+' after unexpected exit')
+        run('ip','link','set','wan0','down');time.sleep(.4);run('ip','link','set','wan0','up')
+        # Model netifd/DHCP restoring its default route after link recovery.
+        run('ip','route','replace','default','via','10.82.0.2','dev','wan0')
+        if args.ipv6:
+            run('ip','-6','addr','replace','fd81:82::1/64','dev','wan0','nodad')
+            run('ip','-6','route','replace','default','via','fd81:82::2','dev','wan0')
+        time.sleep(.6);traffic(args.target_core+' after WAN recovery')
+        if args.target_core=='mihomo':
+            for target in ('sing-box','mihomo'):
+                plan=json.loads(gql('{corePlan(target:'+json.dumps(target)+')}')['corePlan']);assert plan['compatible'],plan
+                gql('mutation{switchCore(target:'+json.dumps(target)+',revision:'+json.dumps(plan['revision'])+')}')
+                traffic('native core round trip '+target);assert digest_database(config/'wing.db')==before
         assert gql('{general{dae{modified}}}')["general"]["dae"]["modified"],"switch applied pending edits"
         stats=gql('{general{runtimeOverview(windowSec:60,maxPoints:60){downloadTotal uploadTotal}}}')["general"]["runtimeOverview"]
         assert int(stats["downloadTotal"])>0,stats
@@ -252,13 +267,13 @@ subprocess.run(['nft','-f','-'],input=body.encode(),check=True)
         assert run('ip','-j','rule')==original_rules,'managed policy rules leaked after switching back'
         assert not (config/'cores/network.json').exists() and not Path('/etc/nftables.d/0-nailink-core.nft').exists()
         run('nft','list','table','inet','unrelated_sentinel')
-        managed=private/"cores/sing-box";managed.rename(private/"cores/sing-box.real")
-        managed.write_text('#!/bin/sh\ncase "$1" in version|check) exec /usr/libexec/daed/cores/sing-box.real "$@" ;; *) exit 77 ;; esac\n');managed.chmod(0o755)
-        plan=json.loads(gql('{corePlan(target:"sing-box")}')["corePlan"]);assert plan["compatible"],plan
-        try:gql('mutation{switchCore(target:"sing-box",revision:'+json.dumps(plan["revision"])+')}');raise AssertionError("late startup failure was accepted")
+        managed=private/("cores/"+args.target_core);managed.rename(private/("cores/"+args.target_core+".real"))
+        managed.write_text('#!/bin/sh\ncase "$1" in '+('version|check' if args.target_core=='sing-box' else '-v|-t')+') exec /usr/libexec/daed/cores/'+args.target_core+'.real "$@" ;; *) exit 77 ;; esac\n');managed.chmod(0o755)
+        plan=json.loads(gql('{corePlan(target:"'+args.target_core+'")}')["corePlan"]);assert plan["compatible"],plan
+        try:gql('mutation{switchCore(target:"'+args.target_core+'",revision:'+json.dumps(plan["revision"])+')}');raise AssertionError("late startup failure was accepted")
         except RuntimeError as error:assert "core_rolled_back" in str(error),error
         traffic("automatic rollback");assert digest_database(config/"wing.db")==before
-        result={"real_bpf":True,"real_tun_nftables":True,"lan_dns_tcp_ai":True,"dae_singbox_dae":True,"late_failure_rollback":True,"all_user_tables_preserved":True,"pending_edits_preserved":True,"singbox_stats":stats,"selected_core_http_udp_probes":True,"unexpected_exit_recovery":True,"wan_recovery":True,"fw4_reload_policies_preserved":args.fw4,"no_policy_rule_leaks":True,"ipv6":args.ipv6}
+        result={"target_core":args.target_core,"real_bpf":True,"real_tun_nftables":True,"lan_dns_tcp_ai":True,"dae_optional_dae":True,"late_failure_rollback":True,"all_user_tables_preserved":True,"pending_edits_preserved":True,"singbox_stats":stats,"selected_core_http_udp_probes":True,"unexpected_exit_recovery":True,"wan_recovery":True,"fw4_reload_policies_preserved":args.fw4,"no_policy_rule_leaks":True,"ipv6":args.ipv6}
         (args.workspace/"result.json").write_text(json.dumps(result,indent=2));print(json.dumps(result),flush=True)
     finally:
         if 'tcpdump' in locals():tcpdump.terminate();tcpdump.wait(timeout=5);capture.close()
@@ -278,8 +293,9 @@ subprocess.run(['nft','-f','-'],input=body.encode(),check=True)
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ("runtime","singbox","probe","nft-root","workspace","host-netns","cgroup-root"):parser.add_argument("--"+name)
+    for name in ("runtime","mihomo","singbox","probe","nft-root","workspace","host-netns","cgroup-root"):parser.add_argument("--"+name)
     parser.add_argument("--inside",action="store_true");parser.add_argument("--wan",action="store_true");parser.add_argument("--client-dns",nargs=2)
+    parser.add_argument('--target-core',choices=['sing-box','mihomo'],default='sing-box')
     parser.add_argument('--fw4',action='store_true')
     parser.add_argument('--ipv6',action='store_true')
     args=parser.parse_args();args.workspace=Path(args.workspace) if args.workspace else None
