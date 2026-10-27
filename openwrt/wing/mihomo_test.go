@@ -4,6 +4,7 @@ package dae
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -22,6 +24,68 @@ import (
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/proxy"
 )
+
+func TestPrivateListenerSurvivesAutomaticPortExhaustion(t *testing.T) {
+	calls := 0
+	l, err := routerListenLoopback(func(network, address string) (net.Listener, error) {
+		calls++
+		if address == "127.0.0.1:0" || calls < 3 {
+			return nil, syscall.EADDRINUSE
+		}
+		if !strings.HasPrefix(address, "127.0.0.1:") { t.Fatal("listener escaped loopback") }
+		return net.Listen(network, address)
+	})
+	if err != nil { t.Fatal(err) }
+	l.Close()
+	if calls < 3 { t.Fatal("occupied listener was not retried") }
+	calls = 0
+	_, err = routerListenLoopback(func(_, _ string) (net.Listener, error) { calls++; return nil, syscall.EADDRINUSE })
+	if err == nil || calls != 65 { t.Fatal("port exhaustion was not bounded", calls, err) }
+	calls = 0
+	_, err = routerListenLoopback(func(_, _ string) (net.Listener, error) { calls++; return nil, syscall.EACCES })
+	if err != syscall.EACCES || calls != 1 { t.Fatal("retried a permission error", calls, err) }
+}
+
+func TestPrivatePortPairRetriesOccupiedUDP(t *testing.T) {
+	busy, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil { t.Fatal(err) }
+	defer busy.Close()
+	calls := 0
+	tcp, udp, err := routerLoopbackPair(func(network, address string) (net.Listener, error) {
+		calls++
+		if calls == 1 { return net.Listen(network, busy.LocalAddr().String()) }
+		return net.Listen(network, address)
+	}, net.ListenPacket)
+	if err != nil { t.Fatal(err) }
+	defer tcp.Close()
+	defer udp.Close()
+	if calls < 2 || tcp.Addr().String() != udp.LocalAddr().String() { t.Fatal("TCP/UDP pair was not reserved together") }
+	if _, err := busy.WriteTo([]byte("still owned"), busy.LocalAddr()); err != nil { t.Fatal("changed another listener", err) }
+}
+
+func TestPrivateListenerRealPortExhaustion(t *testing.T) {
+	if os.Getenv("DAED_ISOLATED_PORT_EXHAUSTION") != "1" { t.Skip("requires a disposable network namespace") }
+	raw, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range")
+	var low, high int
+	if err != nil { t.Fatal(err) }
+	fmt.Sscanf(string(raw), "%d %d", &low, &high)
+	if low < 32768 || high < low || high-low > 127 { t.Fatal("refusing to exhaust a normal system port range") }
+	var held []net.Listener
+	defer func() { for _, l := range held { l.Close() } }()
+	for len(held) <= high-low+1 {
+		l, e := net.Listen("tcp4", "127.0.0.1:0")
+		if e != nil {
+			if !errors.Is(e, syscall.EADDRINUSE) { t.Fatal(e) }
+			break
+		}
+		held = append(held, l)
+	}
+	if len(held) > high-low+1 { t.Fatal("automatic ports were not exhausted") }
+	l, err := routerListenLoopback(net.Listen)
+	if err != nil { t.Fatal("private listener could not recover", err) }
+	defer l.Close()
+	if l.Addr().(*net.TCPAddr).Port >= 30000 { t.Fatal("fallback still used automatic range") }
+}
 
 func TestNativeReadinessRequiresAuthenticatedListeners(t *testing.T) {
 	controller := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{}`)) }))

@@ -122,18 +122,18 @@ func (w *sbLogWriter) Write(data []byte) (int, error) {
 	}
 	return len(data), nil
 }
-func newCorePorts() (sbPorts, []net.Listener, error) {
-	var listeners []net.Listener
+func newCorePorts() (sbPorts, []io.Closer, error) {
+	var listeners []io.Closer
 	ports := sbPorts{}
 	for _, target := range []*int{&ports.Mixed, &ports.API, &ports.DNS} {
-		l, err := net.Listen("tcp4", "127.0.0.1:0")
+		l, udp, err := routerLoopbackPair(net.Listen, net.ListenPacket)
 		if err != nil {
 			for _, l := range listeners {
 				_ = l.Close()
 			}
 			return ports, nil, err
 		}
-		listeners = append(listeners, l)
+		listeners = append(listeners, l, udp)
 		*target = l.Addr().(*net.TCPAddr).Port
 	}
 	var secret [24]byte
@@ -145,6 +145,49 @@ func newCorePorts() (sbPorts, []net.Listener, error) {
 	}
 	ports.Secret = hex.EncodeToString(secret[:])
 	return ports, listeners, nil
+}
+
+func routerListenLoopback(listen func(string, string) (net.Listener, error)) (net.Listener, error) {
+	l, err := listen("tcp4", "127.0.0.1:0")
+	if err == nil || !errors.Is(err, syscall.EADDRINUSE) {
+		return l, err
+	}
+	// Heavy outbound traffic may occupy the entire automatic ephemeral range
+	// with TIME_WAIT sockets. Reserve an explicit loopback port instead; never
+	// change system-wide ranges or take an already bound service's listener.
+	for range 64 {
+		var random [2]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return nil, errors.New("core_ports_unavailable")
+		}
+		port := 10000 + (int(random[0])<<8|int(random[1]))%20000
+		l, err = listen("tcp4", routercore.SocksAddress(port))
+		if err == nil {
+			return l, nil
+		}
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			return nil, err
+		}
+	}
+	return nil, errors.New("core_ports_unavailable")
+}
+
+func routerLoopbackPair(listen func(string, string) (net.Listener, error), packet func(string, string) (net.PacketConn, error)) (net.Listener, net.PacketConn, error) {
+	for range 32 {
+		tcp, err := routerListenLoopback(listen)
+		if err != nil {
+			return nil, nil, err
+		}
+		udp, err := packet("udp4", routercore.SocksAddress(tcp.Addr().(*net.TCPAddr).Port))
+		if err == nil {
+			return tcp, udp, nil
+		}
+		tcp.Close()
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			return nil, nil, err
+		}
+	}
+	return nil, nil, errors.New("core_ports_unavailable")
 }
 func routerCheckSingBox(ctx context.Context, conf *daeConfig.Config, dirs []string, transparent bool) error {
 	profile, _, err := singBoxConfig(conf, dirs, sbPorts{Mixed: 39001, API: 39002, DNS: 39003, Secret: "offline-configuration-check"}, transparent)

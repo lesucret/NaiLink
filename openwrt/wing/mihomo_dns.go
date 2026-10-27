@@ -232,32 +232,22 @@ func startMihomoDNS(profile sbObject, ports sbPorts, logs ...*logrus.Logger) (_ 
 		if len(b.proxyPorts) >= 16 {
 			return nil, errors.New("mihomo_dns_unsupported")
 		}
-		tcp, e := net.Listen("tcp4", "127.0.0.1:0")
+		tcp, udp, e := routerLoopbackPair(net.Listen, net.ListenPacket)
 		if e != nil {
 			return nil, e
 		}
 		port := tcp.Addr().(*net.TCPAddr).Port
-		udp, e := net.ListenPacket("udp4", routercore.SocksAddress(port))
-		if e != nil {
-			tcp.Close()
-			return nil, e
-		}
 		b.reservations = append(b.reservations, tcp, udp)
 		b.proxyPorts[detour] = port
 		listeners = append(listeners, sbObject{"name": "dns-" + routercore.MihomoName(detour), "type": "mixed", "listen": "127.0.0.1", "port": port, "udp": true, "proxy": routercore.MihomoName(detour), "users": []sbObject{{"username": "nailink", "password": ports.Secret}}})
 	}
 	profile["listeners"] = listeners
 	start := func(bootstrap bool) (int, error) {
-		tcp, e := net.Listen("tcp4", "127.0.0.1:0")
+		tcp, udp, e := routerLoopbackPair(net.Listen, net.ListenPacket)
 		if e != nil {
 			return 0, e
 		}
 		port := tcp.Addr().(*net.TCPAddr).Port
-		udp, e := net.ListenPacket("udp4", routercore.SocksAddress(port))
-		if e != nil {
-			tcp.Close()
-			return 0, e
-		}
 		handler := dnsmessage.HandlerFunc(func(w dnsmessage.ResponseWriter, q *dnsmessage.Msg) {
 			reply := new(dnsmessage.Msg)
 			reply.SetRcode(q, dnsmessage.RcodeServerFailure)
