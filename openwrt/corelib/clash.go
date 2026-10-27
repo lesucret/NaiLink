@@ -290,6 +290,23 @@ func ClashLink(p Object) (string, error) {
 	if err := clashUnused(p, used); err != nil {
 		return "", err
 	}
+	// dae's legacy Trojan/TUIC/HTTP readers use allowInsecure, while
+	// AnyTLS expects numeric insecure. Emit the shared spelling understood by
+	// all engines; VMess already carries a typed JSON boolean above.
+	if value := q.Get("insecure"); value != "" {
+		if value == "true" {
+			value = "1"
+		} else {
+			value = "0"
+		}
+		switch kind {
+		case "vless", "trojan", "tuic", "http", "socks5":
+			q.Del("insecure")
+			q.Set("allowInsecure", value)
+		default:
+			q.Set("insecure", value)
+		}
+	}
 	// Only these schemes accept an explicit TLS marker; implied-TLS protocols
 	// retain certificate options without adding an unsupported URI parameter.
 	if kind != "vless" && kind != "trojan" && kind != "hysteria2" {

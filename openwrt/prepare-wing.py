@@ -431,6 +431,9 @@ type Mutation {
         generated[relative] = digest(data)
     register_file = root / "dae-core/component/outbound/dialer/register.go"
     register_text = register_file.read_text(encoding="utf-8")
+    if 'routerProtocolExtraOption(normalizedLink' not in register_text:
+        register_text = register_text.replace('// First, create the protocol dialer', 'extraOption, err := routerProtocolExtraOption(normalizedLink, gOption.ExtraOption)\n\tif err != nil { return nil, err }\n\t// First, create the protocol dialer', 1)
+    register_text = register_text.replace('&gOption.ExtraOption, normalizedLink', '&extraOption, normalizedLink')
     register_text = register_text.replace('daeDialer := NewDialerContext(ctx, d, gOption, iOption, &p)', 'daeDialer := NewDialerContext(ctx, routerProtocolDialer(normalizedLink, d), gOption, iOption, &p)')
     register_file.write_text(register_text, encoding="utf-8", newline="\n")
     generated["dae-core/component/outbound/dialer/register.go"] = digest(register_text.encode())

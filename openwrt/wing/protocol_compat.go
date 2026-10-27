@@ -14,11 +14,39 @@ import (
 	"time"
 
 	proxyurl "github.com/daeuniverse/outbound/common/url"
+	D "github.com/daeuniverse/outbound/dialer"
 	"github.com/daeuniverse/outbound/netproxy"
 	"github.com/daeuniverse/outbound/pool"
 	"github.com/daeuniverse/outbound/protocol/hysteria2/udphop"
 	"golang.org/x/crypto/blake2b"
 )
+
+// The pinned VLESS reader hard-codes AllowInsecure=false. Pass an explicit
+// node preference through a private copy of ExtraOption, never the shared
+// global options, so tests, health checks and real connections agree.
+func routerProtocolExtraOption(link string, original D.ExtraOption) (D.ExtraOption, error) {
+	if !strings.HasPrefix(link, "vless://") {
+		return original, nil
+	}
+	u, err := proxyurl.Parse(link)
+	if err != nil {
+		return original, fmt.Errorf("invalid protocol URL")
+	}
+	var selected *bool
+	for _, key := range []string{"insecure", "allowInsecure", "allow_insecure", "skip-cert-verify"} {
+		for _, value := range u.Query()[key] {
+			b, e := strconv.ParseBool(value)
+			if e != nil || (selected != nil && *selected != b) {
+				return original, fmt.Errorf("invalid or conflicting TLS verification option")
+			}
+			selected = &b
+		}
+	}
+	if selected != nil {
+		original.AllowInsecure = *selected
+	}
+	return original, nil
+}
 
 // The pinned SS stream holds its read mutex while waiting for the response
 // salt, and Close waits for that mutex before closing the underlying socket.

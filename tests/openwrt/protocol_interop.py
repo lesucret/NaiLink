@@ -237,6 +237,7 @@ def run_fixture(args, http_port, udp_port):
                 cases.append({'Name': 'clash-' + kind + '-' + transport, 'Clash': clash})
                 bad = {**clash, 'sni': 'mismatch.invalid'}
                 cases.append({'Name': 'clash-' + kind + '-' + transport + '-certificate-rejected', 'Clash': bad, 'Failure': 'tls_failed'})
+                cases.append({'Name': 'clash-' + kind + '-' + transport + '-explicit-insecure', 'Clash': {**bad, 'skip-cert-verify': True}})
                 if kind == 'trojan' and transport == 'tcp':
                     cases.append({'Name': 'trojan-exporter-udp-enabled', 'Link': link + '&udp=1'})
         number = port(True)
@@ -244,6 +245,7 @@ def run_fixture(args, http_port, udp_port):
                          'users': [{'uuid': uuid, 'password': 'fixture@pass:2026'}], 'congestion_control': 'cubic',
                          'tls': {**vless_tls, 'alpn': ['h3']}})
         cases.append({'Name': 'tuic-v5', 'Link': f'tuic://{uuid}:fixture%40pass%3A2026@127.0.0.1:{number}?sni=vless.fixture.test&alpn=h3&congestion_control=cubic&udp_relay_mode=native'})
+        cases.append({'Name': 'clash-tuic-explicit-insecure', 'Clash': {'name': 'clash-tuic', 'type': 'tuic', 'server': '127.0.0.1', 'port': number, 'uuid': uuid, 'password': 'fixture@pass:2026', 'sni': 'mismatch.invalid', 'skip-cert-verify': True, 'alpn': ['h3']}})
         # Cover the user's VLESS path with independent TLS and WebSocket servers.
         for transport in ["tcp", "ws", "grpc"]:
             number = port()
@@ -264,12 +266,18 @@ def run_fixture(args, http_port, udp_port):
                 link += '&serviceName=fixture'
             cases.append({"Name": "vless-tls-" + transport, "Link": link})
             cases.append({"Name": "vless-tls-" + transport + "-certificate-rejected", "Link": link.replace("sni=vless.fixture.test", "sni=mismatch.invalid"), "Failure": "tls_failed"})
+            clash_vless = {'name': 'clash-vless', 'type': 'vless', 'server': '127.0.0.1', 'port': number, 'uuid': uuid, 'tls': True, 'sni': 'mismatch.invalid', 'skip-cert-verify': True, 'network': transport}
+            if transport == 'ws': clash_vless['ws-opts'] = {'path': '/fixture'}
+            if transport == 'grpc': clash_vless['grpc-opts'] = {'grpc-service-name': 'fixture'}
+            cases.append({'Name': 'clash-vless-' + transport + '-explicit-insecure', 'Clash': clash_vless})
         for kind in ["hysteria2", "anytls"]:
             number = port(kind == "hysteria2")
             password = "fixture:pass:2026" if kind == "hysteria2" else "fixture@pass:2026"
             inbounds.append({"type": kind, "tag": kind, "listen": "127.0.0.1", "listen_port": number, "users": [{"name": "fixture", "password": password}], "tls": tls})
             link = f"{kind}://{urllib.parse.quote(password, safe='')}@127.0.0.1:{number}?sni=fixture.test&insecure=1"
             cases.append({"Name": kind, "Link": link})
+            if kind == 'anytls':
+                cases.append({'Name': 'clash-anytls-explicit-insecure', 'Clash': {'name': 'clash-anytls', 'type': 'anytls', 'server': '127.0.0.1', 'port': number, 'password': password, 'sni': 'mismatch.invalid', 'skip-cert-verify': True}})
             if kind == "anytls":
                 for option in ["insecure=true", "allowInsecure=true"]:
                     cases.append({"Name": f"anytls-{option}", "Link": link.replace("insecure=1", option)})

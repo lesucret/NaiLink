@@ -4,6 +4,7 @@ package dialer
 import (
 	"context"
 	proxyurl "github.com/daeuniverse/outbound/common/url"
+	D "github.com/daeuniverse/outbound/dialer"
 	"github.com/daeuniverse/outbound/netproxy"
 	"github.com/daeuniverse/outbound/protocol/direct"
 	"net"
@@ -18,6 +19,25 @@ type routerLockedReadConn struct {
 	mu      sync.Mutex
 	reading chan struct{}
 	closes  atomic.Int32
+}
+
+func TestRouterVLESSCertificatePreferenceIsPerNode(t *testing.T) {
+	global := D.ExtraOption{AllowInsecure: false, TlsImplementation: "tls"}
+	for _, key := range []string{"insecure", "allowInsecure", "allow_insecure", "skip-cert-verify"} {
+		local, err := routerProtocolExtraOption("vless://fixture@192.0.2.1:443?"+key+"=true", global)
+		if err != nil || !local.AllowInsecure || global.AllowInsecure || local.TlsImplementation != global.TlsImplementation {
+			t.Fatal("node setting lost or global state mutated", err)
+		}
+		verified, err := routerProtocolExtraOption("vless://fixture@192.0.2.1:443?"+key+"=false", local)
+		if err != nil || verified.AllowInsecure || !local.AllowInsecure {
+			t.Fatal("explicit validation preference was not isolated", err)
+		}
+	}
+	for _, options := range []string{"insecure=broken", "insecure=true&allowInsecure=false", "insecure=1&insecure=0"} {
+		if _, err := routerProtocolExtraOption("vless://private-fixture@192.0.2.1:443?"+options, global); err == nil {
+			t.Fatal("invalid setting accepted")
+		}
+	}
 }
 
 func (c *routerLockedReadConn) Read(b []byte) (int, error) {
