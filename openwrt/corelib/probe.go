@@ -11,14 +11,14 @@ import (
 // usable lines to finish; automatic health-check policy remains unchanged.
 const ManualProbeTimeout = 8 * time.Second
 
-var probeGatewayStatus = regexp.MustCompile(`(?:status(?: code)?|http)[\s:=]+50[234]\b`)
+var probeGatewayStatus = regexp.MustCompile(`(?:status(?: code)?|http(?: response(?: status)?)?)[\s:=]+50[234]\b`)
 
 // Classify only recognizable protocol/transport failures. Never retain or
 // return the supplied text: it can contain credentials and remote messages.
 func ProbeProtocolFailure(message string) string {
 	text := strings.ToLower(message)
 	ws := strings.Contains(text, "websocket") || strings.Contains(text, "[ws]")
-	if ws && probeGatewayStatus.MatchString(text) {
+	if (ws || strings.Contains(text, "unexpected http") || strings.Contains(text, "unexpected status")) && probeGatewayStatus.MatchString(text) {
 		return "gateway_failed"
 	}
 	if ws && (strings.Contains(text, "bad handshake") || strings.Contains(text, "bad status") || strings.Contains(text, "unexpected status")) {
