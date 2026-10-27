@@ -522,7 +522,13 @@ func maintenanceDownload(ctx context.Context, address, destination string, limit
 	if err != nil || !allowed(parsed) {
 		return errors.New("download_failed")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 180*time.Second)
+	// Keep metadata requests short, but allow a bounded large component transfer
+	// on slow router links. Header/TLS deadlines still reject stalled starts.
+	transferTimeout := 3 * time.Minute
+	if limit > 8<<20 {
+		transferTimeout = 10 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, transferTimeout)
 	defer cancel()
 	transport := http.DefaultTransport
 	if base, ok := transport.(*http.Transport); ok {
@@ -533,7 +539,7 @@ func maintenanceDownload(ctx context.Context, address, destination string, limit
 		transport = copy
 		defer copy.CloseIdleConnections()
 	}
-	client := &http.Client{Transport: transport, Timeout: 300 * time.Second, CheckRedirect: func(r *http.Request, via []*http.Request) error {
+	client := &http.Client{Transport: transport, Timeout: transferTimeout, CheckRedirect: func(r *http.Request, via []*http.Request) error {
 		if len(via) > 5 || !allowed(r.URL) {
 			return errors.New("redirect_rejected")
 		}

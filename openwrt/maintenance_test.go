@@ -299,6 +299,33 @@ func TestMaintenanceGeodataAtomicActivationAndFailurePaths(t *testing.T) {
 type maintenanceTransport func(*http.Request) (*http.Response, error)
 
 func (f maintenanceTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+func TestMaintenanceLargeTransferBudgetAndCancellation(t *testing.T) {
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	for _, test := range []struct { name string; limit int64; minimum, maximum time.Duration }{
+		{"metadata", 512 << 10, 2 * time.Minute, 3 * time.Minute},
+		{"optional core", 128 << 20, 9 * time.Minute, 10 * time.Minute},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			http.DefaultTransport = maintenanceTransport(func(r *http.Request) (*http.Response, error) {
+				deadline, ok := r.Context().Deadline()
+				remaining := time.Until(deadline)
+				if !ok || remaining < test.minimum || remaining > test.maximum { t.Fatal("incorrect transfer budget", remaining) }
+				return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("verified by caller")), Request: r}, nil
+			})
+			if err := maintenanceDownload(context.Background(), "https://github.com/test", filepath.Join(t.TempDir(), "download"), test.limit); err != nil { t.Fatal(err) }
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	http.DefaultTransport = maintenanceTransport(func(r *http.Request) (*http.Response, error) {
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+	name := filepath.Join(t.TempDir(), "cancelled")
+	if maintenanceDownload(ctx, "https://github.com/test", name, 128<<20) == nil { t.Fatal("caller cancellation ignored") }
+	if _, err := os.Stat(name); !os.IsNotExist(err) { t.Fatal("cancelled download changed destination") }
+}
 func TestMaintenanceDownloadBoundsOriginsAndOutput(t *testing.T) {
 	for _, address := range []string{"http://github.com/test", "https://evil.test/test", "https://github.com:444/test", "https://user@github.com/test"} {
 		if maintenanceDownload(context.Background(), address, filepath.Join(t.TempDir(), "x"), 10) == nil {

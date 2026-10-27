@@ -144,3 +144,7 @@
   新旧品牌沿用 <code>daed</code> 服务、<code>daed-router</code> / <code>luci-app-daed-router</code> 包名和
   <code>/etc/daed</code> 目录，所以系统里看到旧名称属于预期，不代表品牌更新失败。
 </p>
+<p>
+  0.6.41 起，大组件下载最多允许 10
+  分钟；连接与响应头仍有短超时，文件大小和校验不放宽。下载失败保留现有代理及程序，可重新尝试。
+</p>
