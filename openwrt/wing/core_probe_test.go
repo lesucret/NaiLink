@@ -26,7 +26,7 @@ func (f routerProbeDialFunc) DialContext(ctx context.Context, network, address s
 }
 
 func TestPrivateProbePortCollisionRecoveryIsBoundedAndCleansBeforeRetry(t *testing.T) {
-	for _, scenario := range []string{"recover", "exhausted", "other_failure", "cancelled", "cleanup_failed", "factory_failed"} {
+	for _, scenario := range []string{"success", "recover", "exhausted", "other_failure", "cancelled", "cleanup_failed", "factory_failed"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
@@ -42,6 +42,8 @@ func TestPrivateProbePortCollisionRecoveryIsBoundedAndCleansBeforeRetry(t *testi
 				live++
 				s := &coreFakeSession{live: &live, done: make(chan error), readyErr: errors.New("core_ports_unavailable")}
 				switch scenario {
+				case "success":
+					s.readyErr = nil
 				case "recover":
 					if starts == 3 {
 						s.readyErr = nil
@@ -55,8 +57,12 @@ func TestPrivateProbePortCollisionRecoveryIsBoundedAndCleansBeforeRetry(t *testi
 				}
 				return s, nil
 			})
-			if scenario == "recover" {
-				if err != nil || starts != 3 || live != 1 || session == nil {
+			if scenario == "recover" || scenario == "success" {
+				wantStarts := 3
+				if scenario == "success" {
+					wantStarts = 1
+				}
+				if err != nil || starts != wantStarts || live != 1 || session == nil {
 					t.Fatal("listener collision did not recover", starts, live, err)
 				}
 				if routerStopProbe(session) != nil || live != 0 {

@@ -141,6 +141,7 @@ jobs:
     needs: [web, optional-core, extra-core, mihomo-core]
     runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
         cpu: [x86_64, arm64, armv7, mips, mipsle]
     env:

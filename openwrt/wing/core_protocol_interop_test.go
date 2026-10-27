@@ -28,6 +28,46 @@ type routerInteropCase struct {
 	Clash                                          routercore.Object
 }
 
+// A confirmed listener collision can require a fresh process for the same
+// batch. Record each attempted profile's shape rather than treating recovery
+// as a new per-node batch. These are private, temporary fixture credentials.
+func routerInteropStartTrace(real, trace string) string {
+	return fmt.Sprintf(`#!/bin/sh
+if [ "$1" = run ]; then
+  previous=
+  config=
+  for argument in "$@"; do
+    if [ "$previous" = -c ]; then config=$argument; break; fi
+    previous=$argument
+  done
+  [ -n "$config" ] || exit 96
+  /bin/cp "$config" '%s'/start-$$.json || exit 97
+  echo $$ >> '%s'/starts
+fi
+exec '%s' "$@"
+`, trace, trace, real)
+}
+
+func routerInteropBatchSizes(t *testing.T, trace string) []int {
+	t.Helper()
+	starts, err := os.ReadFile(filepath.Join(trace, "starts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sizes []int
+	for _, pid := range strings.Fields(string(starts)) {
+		var profile struct {
+			Inbounds []struct{ Users []json.RawMessage }
+		}
+		data, err := os.ReadFile(filepath.Join(trace, "start-"+pid+".json"))
+		if err != nil || json.Unmarshal(data, &profile) != nil || len(profile.Inbounds) == 0 || len(profile.Inbounds[0].Users) < 2 {
+			t.Fatal("could not inspect actual private batch shape", err)
+		}
+		sizes = append(sizes, len(profile.Inbounds[0].Users)-1)
+	}
+	return sizes
+}
+
 // Use independent protocol servers, not mocked dialers or the embedded dae
 // implementation. All listeners and credentials belong to the local fixture.
 func TestRouterCoreProtocolInteroperability(t *testing.T) {
@@ -271,8 +311,8 @@ func TestRouterCoreProtocolInteroperability(t *testing.T) {
 				t.Fatal(e)
 			}
 			defer func() { _ = os.Remove(native); _ = os.Rename(real, native) }()
-			count := filepath.Join(t.TempDir(), "starts")
-			script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = run ]; then echo started >> '%s'; fi\nexec '%s' \"$@\"\n", count, real)
+			trace := t.TempDir()
+			script := routerInteropStartTrace(real, trace)
 			if e = os.WriteFile(native, []byte(script), 0700); e != nil {
 				t.Fatal(e)
 			}
@@ -289,11 +329,21 @@ func TestRouterCoreProtocolInteroperability(t *testing.T) {
 					t.Fatal("extra bulk request failed", value)
 				}
 			}
-			starts, e := os.ReadFile(count)
-			if e != nil || len(strings.Fields(string(starts))) != 2 {
-				t.Fatal("extra resources were not split into bounded batches", string(starts), e)
+			sizes, next := routerInteropBatchSizes(t, trace), 0
+			for _, want := range []int{8, 1} {
+				attempts := 0
+				for next < len(sizes) && sizes[next] == want {
+					next++
+					attempts++
+				}
+				if attempts < 1 || attempts > 3 {
+					t.Fatal("extra batch shape or retry limit changed", sizes)
+				}
 			}
-			t.Log("9 Naive nodes used two sequential native batches; ordinary 72-node batch remains shared")
+			if next != len(sizes) {
+				t.Fatal("unexpected per-node processes or interleaved extra batches", sizes)
+			}
+			t.Log("9 Naive nodes used sequential 8+1 batches; startup attempts:", sizes)
 		})
 	}
 
@@ -330,9 +380,9 @@ func TestRouterCoreBulkProbe(t *testing.T) {
 	oldBinary, oldDir := routerSingBoxBinary, routerCoreRuntimeDir
 	previous := currentRouterCoreManager()
 	work := t.TempDir()
-	countPath := filepath.Join(work, "starts")
+	trace := t.TempDir()
 	wrapper := filepath.Join(work, "native-wrapper")
-	if err = os.WriteFile(wrapper, []byte(fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = run ]; then echo started >> '%s'; fi\nexec '%s' \"$@\"\n", countPath, binary)), 0700); err != nil {
+	if err = os.WriteFile(wrapper, []byte(routerInteropStartTrace(binary, trace)), 0700); err != nil {
 		t.Fatal(err)
 	}
 	routerSingBoxBinary, routerCoreRuntimeDir = wrapper, filepath.Join(work, "private-core")
@@ -367,11 +417,16 @@ func TestRouterCoreBulkProbe(t *testing.T) {
 			t.Fatalf("result: %+v", r)
 		}
 	}
-	starts, _ := os.ReadFile(countPath)
-	if strings.Count(string(starts), "started") != 1 {
-		t.Fatalf("batch started %d processes", strings.Count(string(starts), "started"))
+	sizes := routerInteropBatchSizes(t, trace)
+	if len(sizes) < 1 || len(sizes) > 3 {
+		t.Fatal("ordinary batch exceeded its startup attempt limit", sizes)
 	}
-	t.Logf("72-node batch: one native process, %s", time.Since(started))
+	for _, size := range sizes {
+		if size != 72 {
+			t.Fatal("ordinary nodes no longer share a single batch", sizes)
+		}
+	}
+	t.Logf("72-node batch: one successful native process, %d startup attempts, %s", len(sizes), time.Since(started))
 	bad, err := routercore.NativeLink(`{"type":"shadowsocks","server":"127.0.0.1","server_port":12345,"method":"invalid-cipher","password":"fixture"}`)
 	if err != nil {
 		t.Fatal(err)
