@@ -495,6 +495,8 @@ type Mutation {
         ("dae/router_singbox_config.go", "singbox_config.go"),
         ("dae/router_mihomo_config.go", "mihomo_config.go"),
         ("dae/router_mihomo_dns.go", "mihomo_dns.go"),
+        ("dae/router_mihomo_dns_transport.go", "mihomo_dns_transport.go"),
+        ("dae/router_mihomo_dns_transport_test.go", "mihomo_dns_transport_test.go"),
         ("dae/router_mihomo_runtime.go", "mihomo_runtime.go"),
         ("dae/router_mihomo_test.go", "mihomo_test.go"),
         ("dae/router_singbox_runtime.go", "singbox_runtime.go"),

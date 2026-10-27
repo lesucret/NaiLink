@@ -2,24 +2,24 @@
 package dae
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/binary"
 	"errors"
-	"github.com/sirupsen/logrus"
 	"io"
 	"net"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/daeuniverse/dae-wing/routercore"
 	dnsmessage "github.com/miekg/dns"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/net/proxy"
 )
 
@@ -39,28 +39,48 @@ type mhDNSBridge struct {
 	rules                           []mhDNSRule
 	final, bootstrap, iface, secret string
 	slots                           chan struct{}
+	pending                         chan struct{}
+	wire                            mhDNSWirePool
+	httpMu                          sync.Mutex
+	httpClients                     map[int]*http.Client
+	httpClosed                      bool
+	closeOnce                       sync.Once
 }
 
 func (b *mhDNSBridge) Close() {
-	b.cancel()
-	b.releaseReservations()
-	for _, s := range b.servers {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = s.ShutdownContext(ctx)
-		if s.Listener != nil {
-			_ = s.Listener.Close()
+	b.closeOnce.Do(func() {
+		b.cancel()
+		b.wire.close()
+		b.closeHTTP()
+		b.releaseReservations()
+		for _, s := range b.servers {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = s.ShutdownContext(ctx)
+			if s.Listener != nil {
+				_ = s.Listener.Close()
+			}
+			if s.PacketConn != nil {
+				_ = s.PacketConn.Close()
+			}
+			cancel()
 		}
-		if s.PacketConn != nil {
-			_ = s.PacketConn.Close()
-		}
-		cancel()
-	}
+	})
 }
 func (b *mhDNSBridge) releaseReservations() {
 	for _, c := range b.reservations {
 		_ = c.Close()
 	}
 	b.reservations = nil
+}
+func (b *mhDNSBridge) warnDNS(code string) {
+	if b.log == nil {
+		return
+	}
+	now := time.Now().Unix()
+	last := b.lastLog.Load()
+	if now > last && b.lastLog.CompareAndSwap(last, now) {
+		b.log.WithFields(logrus.Fields{"core": "mihomo", "phase": "dns_bridge", "code": code}).Warn("DNS forwarding failed")
+	}
 }
 func mhDNSCompile(rule sbObject, sets map[string][]sbObject) (func(*dnsmessage.Msg) bool, error) {
 	var conditions []func(*dnsmessage.Msg) bool
@@ -194,7 +214,7 @@ func startMihomoDNS(profile sbObject, ports sbPorts, logs ...*logrus.Logger) (_ 
 	dns := canonical["dns"].(sbObject)
 	route := canonical["route"].(sbObject)
 	ctx, cancel := context.WithCancel(context.Background())
-	b := &mhDNSBridge{ctx: ctx, cancel: cancel, slots: make(chan struct{}, 32), upstreams: map[string]sbObject{}, proxyPorts: map[string]int{}, secret: ports.Secret, final: mhString(dns["final"]), iface: mhString(route["default_interface"])}
+	b := &mhDNSBridge{ctx: ctx, cancel: cancel, slots: make(chan struct{}, 32), pending: make(chan struct{}, 64), upstreams: map[string]sbObject{}, proxyPorts: map[string]int{}, secret: ports.Secret, final: mhString(dns["final"]), iface: mhString(route["default_interface"])}
 	if len(logs) > 0 {
 		b.log = logs[0]
 	}
@@ -255,10 +275,24 @@ func startMihomoDNS(profile sbObject, ports sbPorts, logs ...*logrus.Logger) (_ 
 				_ = w.WriteMsg(reply)
 				return
 			}
+			ctx, stop := context.WithTimeout(b.ctx, 6*time.Second)
+			defer stop()
+			// Bound both active queries and waiters, while allowing short browser bursts.
+			select {
+			case b.pending <- struct{}{}:
+				defer func() { <-b.pending }()
+			default:
+				b.warnDNS("dns_overloaded")
+				_ = w.WriteMsg(reply)
+				return
+			}
 			select {
 			case b.slots <- struct{}{}:
 				defer func() { <-b.slots }()
-			default:
+			case <-ctx.Done():
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					b.warnDNS("dns_queue_timeout")
+				}
 				_ = w.WriteMsg(reply)
 				return
 			}
@@ -283,28 +317,22 @@ func startMihomoDNS(profile sbObject, ports sbPorts, logs ...*logrus.Logger) (_ 
 					}
 				}
 			}
-			ctx, stop := context.WithTimeout(b.ctx, 6*time.Second)
-			defer stop()
 			answer, e := b.exchange(ctx, q, b.upstreams[target], bootstrap)
 			if e == nil {
 				reply = answer
-			} else if b.log != nil && !errors.Is(e, context.Canceled) {
-				now := time.Now().Unix()
-				last := b.lastLog.Load()
-				if now > last && b.lastLog.CompareAndSwap(last, now) {
-					code := routerCoreProbeFailure(e)
-					switch e.Error() {
-					case "missing_dns_upstream", "missing_dns_detour", "invalid_dns_reply", "invalid_dns_upstream", "mihomo_dns_unsupported", "dns_https_failed":
-						code = e.Error()
-					}
-					if errors.Is(e, syscall.ENODEV) {
-						code = "dns_interface_missing"
-					}
-					if errors.Is(e, syscall.EPERM) || errors.Is(e, syscall.EACCES) {
-						code = "dns_permission_failed"
-					}
-					b.log.WithFields(logrus.Fields{"core": "mihomo", "phase": "dns_bridge", "code": code}).Warn("DNS forwarding failed")
+			} else if !errors.Is(e, context.Canceled) {
+				code := routerCoreProbeFailure(e)
+				switch e.Error() {
+				case "missing_dns_upstream", "missing_dns_detour", "invalid_dns_reply", "invalid_dns_upstream", "mihomo_dns_unsupported", "dns_https_failed":
+					code = e.Error()
 				}
+				if errors.Is(e, syscall.ENODEV) {
+					code = "dns_interface_missing"
+				}
+				if errors.Is(e, syscall.EPERM) || errors.Is(e, syscall.EACCES) {
+					code = "dns_permission_failed"
+				}
+				b.warnDNS(code)
 			}
 			_ = w.WriteMsg(reply)
 		})
@@ -388,64 +416,33 @@ func (b *mhDNSBridge) exchange(ctx context.Context, q *dnsmessage.Msg, server sb
 		if proxyPort > 0 {
 			answer, err = routerSOCKSDNSExchange(ctx, sbPorts{Mixed: proxyPort, Secret: b.secret}, net.ParseIP(host), port, q)
 		} else {
-			answer, _, err = (&dnsmessage.Client{Net: "udp", Timeout: 5 * time.Second, Dialer: dialer}).ExchangeContext(ctx, q, address)
+			answer, err = b.exchangeWire(ctx, q, mhDNSKey(typ, address, proxyPort), func(ctx context.Context) (net.Conn, error) { return dialer.DialContext(ctx, "udp", address) })
 		}
 	case "tcp", "tls":
-		conn, e := dial(ctx, "tcp", address)
-		if e != nil {
-			return nil, e
-		}
-		defer conn.Close()
-		stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-		defer stop()
-		deadline := time.Now().Add(5 * time.Second)
-		if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-			deadline = d
-		}
-		_ = conn.SetDeadline(deadline)
-		if typ == "tls" {
-			tlsConn := tls.Client(conn, &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host})
-			if e = tlsConn.HandshakeContext(ctx); e != nil {
+		answer, err = b.exchangeWire(ctx, q, mhDNSKey(typ, address, proxyPort), func(ctx context.Context) (net.Conn, error) {
+			conn, e := dial(ctx, "tcp", address)
+			if e != nil {
 				return nil, e
 			}
-			conn = tlsConn
-		}
-		client := &dnsmessage.Conn{Conn: conn}
-		if e = client.WriteMsg(q); e != nil {
-			return nil, e
-		}
-		answer, err = client.ReadMsg()
+			if typ != "tls" {
+				return conn, nil
+			}
+			stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+			defer stop()
+			deadline := time.Now().Add(5 * time.Second)
+			if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+				deadline = d
+			}
+			_ = conn.SetDeadline(deadline)
+			tc := tls.Client(conn, &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host})
+			if e = tc.HandshakeContext(ctx); e != nil {
+				_ = conn.Close()
+				return nil, e
+			}
+			return tc, nil
+		})
 	case "https":
-		path := mhString(server["path"])
-		if path == "" {
-			path = "/dns-query"
-		}
-		payload, e := q.Pack()
-		if e != nil {
-			return nil, e
-		}
-		request, e := http.NewRequestWithContext(ctx, "POST", "https://"+address+path, bytes.NewReader(payload))
-		if e != nil {
-			return nil, e
-		}
-		request.Header.Set("Content-Type", "application/dns-message")
-		request.Header.Set("Accept", "application/dns-message")
-		transport := &http.Transport{Proxy: nil, DialContext: dial, TLSHandshakeTimeout: 5 * time.Second}
-		defer transport.CloseIdleConnections()
-		response, e := (&http.Client{Transport: transport, Timeout: 6 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(request)
-		if e != nil {
-			return nil, e
-		}
-		defer response.Body.Close()
-		if response.StatusCode != 200 || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/dns-message") {
-			return nil, errors.New("dns_https_failed")
-		}
-		raw, e := io.ReadAll(io.LimitReader(response.Body, 65536))
-		if e != nil {
-			return nil, e
-		}
-		answer = new(dnsmessage.Msg)
-		err = answer.Unpack(raw)
+		answer, err = b.exchangeHTTPS(ctx, q, address, mhString(server["path"]), proxyPort, dial)
 	default:
 		return nil, errors.New("mihomo_dns_unsupported")
 	}
@@ -466,7 +463,7 @@ func (b *mhDNSBridge) exchange(ctx context.Context, q *dnsmessage.Msg, server sb
 	return answer, nil
 }
 func mhValidDNSAnswer(q, a *dnsmessage.Msg) bool {
-	return a != nil && a.Response && a.Id == q.Id && len(a.Question) == 1 && len(q.Question) == 1 && strings.EqualFold(a.Question[0].Name, q.Question[0].Name) && a.Question[0].Qtype == q.Question[0].Qtype && a.Question[0].Qclass == q.Question[0].Qclass
+	return a != nil && a.Response && a.Opcode == q.Opcode && a.Id == q.Id && len(a.Question) == 1 && len(q.Question) == 1 && strings.EqualFold(a.Question[0].Name, q.Question[0].Name) && a.Question[0].Qtype == q.Question[0].Qtype && a.Question[0].Qclass == q.Question[0].Qclass
 }
 
 // Shared SOCKS5 UDP DNS exchange. The destination and question are verified;
