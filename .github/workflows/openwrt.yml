@@ -113,15 +113,8 @@ jobs:
         cpu: [x86_64, arm64]
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.26.0'
-          cache: false
-      - name: Build checksum-pinned optional Naive, WireGuard and private Tor bundle
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends lld-20 zstd
-          python3 openwrt/extra.py --cpu '${{ matrix.cpu }}' --work /tmp/nailink-extra-build --sdk-work /tmp/nailink-sdk --output .build/extra-core --verify-pins
+      - name: Verify unchanged reviewed extension and its corresponding source
+        run: python3 scripts/reuse-protocol-extension.py --cpu '${{ matrix.cpu }}' --output .build/extra-core
       - uses: actions/upload-artifact@v7
         with:
           name: openwrt-core-extra-${{ matrix.cpu }}
