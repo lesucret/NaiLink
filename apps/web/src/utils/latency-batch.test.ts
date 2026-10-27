@@ -112,6 +112,8 @@ describe('bounded latency testing', () => {
     expect(latencyRequestFailure(new Error('cannot resolve latency check target'))).toBe('target')
     expect(latencyRequestFailure(new Error('invalid id'))).toBe('request')
     expect(latencyRequestFailure(new Error('HTTP 502'))).toBe('service')
+    expect(latencyRequestFailure(new Error('core_ports_unavailable'))).toBe('ports')
+    expect(latencyRequestFailure(new Error('core_ports_unavailable private://password'))).toBe('service')
   })
   it('stopping during retry backoff submits no extra probes', async () => {
     let stop = false

@@ -218,10 +218,7 @@ func (j *latencyJob) run(ctx context.Context, nodes []db.Node) {
 		j.status.Code = "test_job_timeout"
 	case err != nil:
 		j.status.Phase = "failed"
-		j.status.Code = "test_job_failed"
-		if strings.Contains(err.Error(), "tcp_check_url") || strings.Contains(err.Error(), "resolve latency check target") {
-			j.status.Code = "check_target_failed"
-		}
+		j.status.Code = latencyJobFailure(err)
 	case len(j.results) != len(nodes):
 		j.status.Phase = "failed"
 		j.status.Code = "test_job_failed"
@@ -229,4 +226,14 @@ func (j *latencyJob) run(ctx context.Context, nodes []db.Node) {
 		j.status.Phase = "completed"
 	}
 	j.mu.Unlock()
+}
+
+func latencyJobFailure(err error) string {
+	if err.Error() == "core_ports_unavailable" {
+		return "core_ports_unavailable"
+	}
+	if strings.Contains(err.Error(), "tcp_check_url") || strings.Contains(err.Error(), "resolve latency check target") {
+		return "check_target_failed"
+	}
+	return "test_job_failed"
 }

@@ -308,6 +308,7 @@
     "retryFailed": "Retry failed ({{count}})",
     "stopping": "Stopping…",
     "failure": {
+      "ports": "Test ports are busy. Completed results are retained; resume unfinished nodes shortly.",
       "busy": "Another node test is running. Try again shortly.",
       "coreChanged": "The core changed. Completed results are retained; retry the remaining nodes.",
       "expired": "The job expired. Completed results are retained; resume the remaining nodes.",

@@ -2,11 +2,12 @@ import type { NodeLatencyProbeResult } from '~/apis'
 
 export function latencyRequestFailure(
   error: unknown,
-): 'session' | 'target' | 'request' | 'service' | 'busy' | 'coreChanged' | 'expired' {
+): 'session' | 'target' | 'request' | 'service' | 'busy' | 'coreChanged' | 'expired' | 'ports' {
   const response = (error as { response?: { status?: number; errors?: { message?: string }[] } })?.response
   const message = response?.errors?.[0]?.message || (error instanceof Error ? error.message : '')
   if (response?.status === 401 || response?.status === 403 || /access denied/i.test(message)) return 'session'
   if (/latency_job_busy/.test(message)) return 'busy'
+  if (message === 'core_ports_unavailable') return 'ports'
   if (/core_changed/.test(message)) return 'coreChanged'
   if (/latency_job_expired|test_job_timeout/.test(message)) return 'expired'
   if (/check_target_failed|resolve latency check target|tcp_check_url|parse config/i.test(message)) return 'target'

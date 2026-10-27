@@ -4,6 +4,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/daeuniverse/dae-wing/common"
 	"github.com/daeuniverse/dae-wing/db"
 	dialer "github.com/daeuniverse/dae/component/outbound/dialer"
@@ -66,6 +67,19 @@ func TestLatencyJobBoundAndNoImplicitProbes(t *testing.T) {
 	}
 	if _, err := LatencyJob("unknown", 0); err == nil {
 		t.Fatal("reading missing job created work")
+	}
+}
+
+func TestLatencyJobStartupFailureKeepsOnlyFixedSafeCodes(t *testing.T) {
+	for _, test := range []struct{ message, code string }{
+		{"core_ports_unavailable", "core_ports_unavailable"},
+		{"cannot resolve latency check target", "check_target_failed"},
+		{"private://fixture-password@host/secret", "test_job_failed"},
+		{"core_ports_unavailable private-fixture-password", "test_job_failed"},
+	} {
+		if got := latencyJobFailure(errors.New(test.message)); got != test.code {
+			t.Fatal("job lost its safe startup category or exposed arbitrary error text", got)
+		}
 	}
 }
 func TestLatencyJobSurvivesRequestCancellationIsIdempotentAndRedacted(t *testing.T) {
