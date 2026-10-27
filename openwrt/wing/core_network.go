@@ -327,7 +327,7 @@ func routerRecoverSingboxNetwork(root string) error {
 				}
 			}
 			group, groupErr := syscall.Getpgid(owner.PID)
-			if binary != routerSingBoxBinary || !configFound || groupErr != nil || group != owner.PID {
+			if !routerManagedSingBoxProgram(binary) || !configFound || groupErr != nil || group != owner.PID {
 				return errors.New("core_process_ownership_failed")
 			}
 			_ = syscall.Kill(-owner.PID, syscall.SIGTERM)
@@ -437,4 +437,12 @@ func routerCoreManagerLock(root string) (*os.File, error) {
 		return nil, errors.New("core_manager_already_running")
 	}
 	return file, nil
+}
+
+func routerManagedSingBoxProgram(path string) bool {
+	if path == routerSingBoxBinary {
+		return true
+	}
+	directory, err := routercore.ExtraDirectory(routerExtraRoot)
+	return err == nil && path == filepath.Join(directory, "sing-box")
 }

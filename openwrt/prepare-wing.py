@@ -462,6 +462,7 @@ type Mutation {
         ("dae/router_core_overview.go", "core_overview.go"),
         ("dae/router_core_config_test.go", "core_config_test.go"),
         ("dae/router_core_protocol_interop_test.go", "core_protocol_interop_test.go"),
+        ("dae/router_core_extra_test.go", "core_extra_test.go"),
         ("dae/router_core_probe.go", "core_probe.go"),
         ("dae/router_core_probe_test.go", "core_probe_test.go"),
         ("graphql/service/node/router_core_probe.go", "node_core_probe.go"),

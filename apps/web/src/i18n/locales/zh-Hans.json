@@ -274,6 +274,8 @@
       "cancelled": "已取消",
       "authentication": "认证失败",
       "target": "测试地址异常",
+      "extension": "缺少扩展组件",
+      "torBootstrap": "Tor 引导失败",
       "udpUnsupported": "不支持 UDP"
     },
     "unavailable": "不可用",

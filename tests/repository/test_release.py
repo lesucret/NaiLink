@@ -43,6 +43,8 @@ class ReleaseSafetyTest(unittest.TestCase):
         (self.directory / "daed-openwrt-source.tar.gz").write_bytes(b"test source")
         for suffix in ("x86_64", "arm64", "source"):
             (self.directory / ("nailink-sing-box-1.14.3-nailink.1-" + suffix + ".tar.gz")).write_bytes(b"core fixture")
+        for suffix in ("x86_64", "arm64", "source"):
+            (self.directory / ("nailink-sing-box-extra-1.14.3-nailink.2-" + suffix + ".tar.gz")).write_bytes(b"extension fixture")
         (self.directory / "install.sh").write_text("#!/bin/sh\nrelease=openwrt-v" + VERSION + "\n")
         self.manifest()
 

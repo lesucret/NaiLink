@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/daeuniverse/dae-wing/routercore"
+	daeCommon "github.com/daeuniverse/dae/common"
 	daeConfig "github.com/daeuniverse/dae/config"
 	dnsmessage "github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
@@ -29,6 +30,8 @@ import (
 )
 
 var routerSingBoxBinary = routercore.BinaryPath
+var routerExtraRoot = routercore.ExtraRoot
+var routerTorDataRoot = "/etc/daed/tor"
 var routerCoreRuntimeDir = "/var/run/daed/cores"
 var routerCorePreflight = func(ctx context.Context, target string) error {
 	command := exec.CommandContext(ctx, "/usr/libexec/daed/check", "--core", target, "--check")
@@ -144,10 +147,10 @@ func routerCheckSingBox(ctx context.Context, conf *daeConfig.Config, dirs []stri
 func routerCheckSingBoxProfile(ctx context.Context, profile sbObject) error {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	if err := routerSingBoxVersion(ctx); err != nil {
+	program, _, err := routerPrepareExtra(ctx, profile, false)
+	if err != nil {
 		return err
 	}
-	var err error
 	if err = routercore.PrivateDir(routerCoreRuntimeDir); err != nil {
 		return err
 	}
@@ -164,7 +167,7 @@ func routerCheckSingBoxProfile(ctx context.Context, profile sbObject) error {
 	if err = routercore.Write(path, data); err != nil {
 		return err
 	}
-	command := exec.CommandContext(ctx, routerSingBoxBinary, "check", "--disable-color", "-c", path)
+	command := exec.CommandContext(ctx, program, "check", "--disable-color", "-c", path)
 	if err = command.Run(); err != nil {
 		if ctx.Err() != nil {
 			return errors.New("core_configuration_check_timeout")
@@ -175,6 +178,7 @@ func routerCheckSingBoxProfile(ctx context.Context, profile sbObject) error {
 }
 
 type routerSingBoxSession struct {
+	hasTor      bool
 	mu          sync.Mutex
 	cmd         *exec.Cmd
 	done        chan error
@@ -194,9 +198,6 @@ type routerSingBoxSession struct {
 }
 
 func newRouterSingBoxSession(ctx context.Context, log *logrus.Logger, conf *daeConfig.Config, dirs []string, transparent bool, profileHooks ...func(sbObject, sbPorts)) (routerCoreSession, error) {
-	if err := routerSingBoxVersion(ctx); err != nil {
-		return nil, err
-	}
 	ports, reserved, err := newCorePorts()
 	if err != nil {
 		return nil, errors.New("core_ports_unavailable")
@@ -210,6 +211,10 @@ func newRouterSingBoxSession(ctx context.Context, log *logrus.Logger, conf *daeC
 	if err != nil {
 		return nil, err
 	}
+	program, hasTor, err := routerPrepareExtra(ctx, profile, !transparent)
+	if err != nil {
+		return nil, err
+	}
 	for _, hook := range profileHooks {
 		hook(profile, ports)
 	}
@@ -220,7 +225,7 @@ func newRouterSingBoxSession(ctx context.Context, log *logrus.Logger, conf *daeC
 	if err != nil {
 		return nil, err
 	}
-	s := &routerSingBoxSession{done: make(chan error, 1), exit: make(chan struct{}), ports: ports, dir: dir, conf: conf, dirs: dirs, transparent: transparent, log: log}
+	s := &routerSingBoxSession{done: make(chan error, 1), exit: make(chan struct{}), ports: ports, dir: dir, conf: conf, dirs: dirs, transparent: transparent, log: log, hasTor: hasTor}
 	data, err := json.Marshal(profile)
 	if err != nil {
 		_ = os.RemoveAll(dir)
@@ -231,7 +236,7 @@ func newRouterSingBoxSession(ctx context.Context, log *logrus.Logger, conf *daeC
 		_ = os.RemoveAll(dir)
 		return nil, err
 	}
-	check := exec.CommandContext(ctx, routerSingBoxBinary, "check", "--disable-color", "-c", path)
+	check := exec.CommandContext(ctx, program, "check", "--disable-color", "-c", path)
 	if err = check.Run(); err != nil {
 		_ = os.RemoveAll(dir)
 		return nil, errors.New("singbox_configuration_invalid")
@@ -252,7 +257,7 @@ func newRouterSingBoxSession(ctx context.Context, log *logrus.Logger, conf *daeC
 		_ = os.RemoveAll(dir)
 		return cause
 	}
-	s.cmd = exec.Command(routerSingBoxBinary, "run", "--disable-color", "-D", dir, "-c", path)
+	s.cmd = exec.Command(program, "run", "--disable-color", "-D", dir, "-c", path)
 	// TUN and routes are native netlink operations. The manager owns fw4
 	// integration; hide external tools from this optional child so its automatic
 	// fw4 hook cannot replace shared policies or reload other plugins' rules.
@@ -350,6 +355,9 @@ func (s *routerSingBoxSession) Ready(ctx context.Context) error {
 func (s *routerSingBoxSession) Stop(ctx context.Context) error {
 	s = s.current()
 	s.ready.Store(false)
+	if s.cmd != nil && s.cmd.Process != nil {
+		_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGTERM)
+	}
 	select {
 	case <-s.exit:
 	default:
@@ -390,7 +398,7 @@ func (s *routerSingBoxSession) Reload(message *ReloadMessage) error {
 			return err
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), routerCoreStartTimeout(conf))
 	defer cancel()
 	if err = routerCheckSingBox(ctx, conf, old.dirs, old.transparent); err != nil {
 		if rollback != nil {
@@ -430,7 +438,7 @@ func (s *routerSingBoxSession) Reload(message *ReloadMessage) error {
 			return errors.New("core_rollback_failed")
 		}
 	}
-	restoreCtx, stop := context.WithTimeout(context.Background(), 45*time.Second)
+	restoreCtx, stop := context.WithTimeout(context.Background(), routerCoreStartTimeout(old.conf))
 	defer stop()
 	restored, restoreErr := newRouterSingBoxSession(restoreCtx, old.log, old.conf, old.dirs, old.transparent)
 	if restoreErr == nil {
@@ -514,4 +522,60 @@ func routerVerifySingBox(ctx context.Context, s *routerSingBoxSession) error {
 		return errors.New("core_connectivity_failed")
 	}
 	return nil
+}
+
+func routerPrepareExtra(ctx context.Context, profile sbObject, probe bool) (string, bool, error) {
+	purpose := "main"
+	if probe {
+		purpose = "probe"
+	}
+	required, tor, err := routercore.PrepareExtraProfile(profile, routerExtraRoot, routerTorDataRoot, purpose)
+	if err != nil {
+		return "", false, err
+	}
+	if !required {
+		return routerSingBoxBinary, false, routerSingBoxVersion(ctx)
+	}
+	directory, err := routercore.ExtraDirectory(routerExtraRoot)
+	if err != nil {
+		return "", false, err
+	}
+	program := filepath.Join(directory, "sing-box")
+	command := exec.CommandContext(ctx, program, "version")
+	var output routerCoreBoundedWriter
+	command.Stdout = &output
+	command.Stderr = io.Discard
+	if command.Run() != nil || !strings.HasPrefix(string(output.data), "sing-box version "+routercore.ExtraVersion+"\n") {
+		return "", false, errors.New("singbox_version_mismatch")
+	}
+	if tor {
+		for _, node := range profile["outbounds"].([]sbObject) {
+			if node["type"] == "tor" {
+				directory := node["data_directory"].(string)
+				for _, p := range []string{routerTorDataRoot, filepath.Dir(directory), directory} {
+					if err = routercore.PrivateDir(p); err != nil {
+						return "", false, err
+					}
+				}
+			}
+		}
+	}
+	return program, tor, nil
+}
+
+func routerCoreStartTimeout(conf *daeConfig.Config) time.Duration {
+	if conf != nil {
+		for _, entry := range conf.Node {
+			_, link := daeCommon.GetTagFromLinkLikePlaintext(string(entry))
+			node, err := routercore.Node(link, "timeout-check", routercore.NodeOptions{})
+			if err == nil {
+				for _, out := range routercore.ExpandNode(node) {
+					if routercore.NativeFeature(out) == "tor" {
+						return 180 * time.Second
+					}
+				}
+			}
+		}
+	}
+	return 45 * time.Second
 }

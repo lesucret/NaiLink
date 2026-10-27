@@ -143,3 +143,57 @@ func TestCorePinnedArchiveInstall(t *testing.T) {
 		t.Fatal(result.Job)
 	}
 }
+
+func TestExtraArchiveAndFailedUpdatePreserveExisting(t *testing.T) {
+	archive := os.Getenv("DAED_TEST_EXTRA_ARCHIVE")
+	if archive == "" {
+		t.Skip("provide reviewed extension archive")
+	}
+	m := maintenanceFixture(t)
+	m.extraRoot = filepath.Join(t.TempDir(), "components")
+	db := filepath.Join(m.configDir, "wing.db")
+	_ = os.WriteFile(db, []byte("user configuration"), 0600)
+	m.fetch = func(_ context.Context, _, dest string, _ int64) error {
+		in, err := os.Open(archive)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		out, err := os.Create(dest)
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(out, in)
+		closeErr := out.Close()
+		if err != nil {
+			return err
+		}
+		return closeErr
+	}
+	result := runFixtureJob(t, m, "core_install_extra")
+	if result.Job.State != "success" || !result.Cores.Extra {
+		t.Fatal(result.Job)
+	}
+	installed, err := routercore.ExtraDirectory(m.extraRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A bad subsequent archive must leave the exact previous pointer and DB.
+	m.fetch = func(_ context.Context, _, dest string, _ int64) error {
+		return os.WriteFile(dest, []byte("truncated"), 0600)
+	}
+	result = runFixtureJob(t, m, "core_install_extra")
+	if result.Job.State != "error" || result.Job.Code != "checksum_failed" {
+		t.Fatal(result.Job)
+	}
+	after, err := routercore.ExtraDirectory(m.extraRoot)
+	if err != nil || after != installed {
+		t.Fatal("old components replaced")
+	}
+	if raw, _ := os.ReadFile(db); string(raw) != "user configuration" {
+		t.Fatal("user configuration changed")
+	}
+	if paths, _ := filepath.Glob(filepath.Join(m.extraRoot, ".extra-stage-*")); len(paths) != 0 {
+		t.Fatal("staging leaked")
+	}
+}

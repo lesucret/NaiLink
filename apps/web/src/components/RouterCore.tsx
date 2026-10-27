@@ -108,6 +108,25 @@ export function RouterCore() {
               {repairCore ? '重新安装 sing-box（请先切回 dae）' : '下载并安装 sing-box（保留当前内核运行）'}
             </Button>
           )}
+          {target === 'sing-box' && (
+            <section className="space-y-2 rounded-lg border p-3 text-sm" aria-label="扩展协议组件">
+              <p className="font-medium">Naive · WireGuard · Tor</p>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                {core?.extra ? `扩展协议包已安装 · ${core.extra_version}` : '扩展协议包尚未安装'}。 仅 x86_64 / ARM64
+                可用，下载约 30 MiB，请预留 400 MiB 存储。 不使用时不启动 Tor。Tor 仅支持 TCP，首次引导可能需要数分钟。
+              </p>
+              {!core?.extra && (
+                <Button
+                  variant="outline"
+                  className="min-h-11 w-full whitespace-normal"
+                  disabled={blocked || current === 'sing-box'}
+                  onClick={() => mutation.mutate('core_install_extra')}
+                >
+                  {current === 'sing-box' ? '请先切回 dae 再安装扩展包' : '按需安装扩展协议包'}
+                </Button>
+              )}
+            </section>
+          )}
           {plan && (
             <section className="space-y-2 rounded-lg border p-3 text-sm" aria-label="内核兼容性报告">
               <p className="font-medium">
@@ -142,9 +161,11 @@ export function RouterCore() {
                   : coreJob.state === 'success'
                     ? coreJob.action.startsWith('core_switch_')
                       ? `切换完成，当前内核：${current}`
-                      : coreJob.action === 'core_install_singbox'
-                        ? '内核已安装，请检查兼容性后再切换。'
-                        : '兼容性检查完成，请查看报告。'
+                      : coreJob.action === 'core_install_extra'
+                        ? '扩展协议包已安装，现有节点和配置保留。'
+                        : coreJob.action === 'core_install_singbox'
+                          ? '内核已安装，请检查兼容性后再切换。'
+                          : '兼容性检查完成，请查看报告。'
                     : '正在检查、安装或切换；可关闭窗口，后台任务继续执行。'}
               </p>
             </div>

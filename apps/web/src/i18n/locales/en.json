@@ -274,6 +274,8 @@
       "cancelled": "Cancelled",
       "authentication": "Authentication failed",
       "target": "Check URL failed",
+      "extension": "Extension required",
+      "torBootstrap": "Tor bootstrap failed",
       "udpUnsupported": "UDP unsupported"
     },
     "unavailable": "Unavailable",

@@ -50,6 +50,8 @@ export function formatLatencyLabel(result: NodeLatencyProbeResult | undefined, t
       return t('latency.nodeFailure.parameters')
     }
     const reasons = {
+      extra_not_installed: 'extension',
+      tor_bootstrap_failed: 'torBootstrap',
       invalid_node: 'invalidNode',
       dns_failed: 'dns',
       tls_failed: 'tls',

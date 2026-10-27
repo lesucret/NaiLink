@@ -5,6 +5,7 @@ export type MaintenanceAction =
   | 'core_check_dae'
   | 'core_check_singbox'
   | 'core_install_singbox'
+  | 'core_install_extra'
   | 'core_switch_dae'
   | 'core_switch_singbox'
 export interface CorePlan {
@@ -24,6 +25,8 @@ export interface CoreStatus {
   installed: boolean
   supported: boolean
   version: string
+  extra?: boolean
+  extra_version?: string
   plan?: CorePlan
 }
 export interface MaintenanceJob {
@@ -75,6 +78,9 @@ export const maintenanceMessages: Record<string, string> = {
   state_failed: '无法保存维护状态，请检查存储空间和文件权限。',
   interrupted: '维护任务被中断，请重新检查当前版本与运行日志后再重试。',
   operation_failed: '维护操作未完成，请查看运行日志后重试。',
+  extra_not_installed: '该节点需要扩展协议包，请在代理内核窗口按需安装。',
+  extra_dependency_failed: '扩展组件依赖检查失败，原组件、节点和配置保留。',
+  extra_rollback_failed: '组件指针恢复未确认，旧版文件和配置保留，请检查日志。',
   core_incompatible: '兼容性检查未通过，原内核和配置保留。请查看检查报告。',
   core_configuration_changed: '运行配置或规则库已变化，请重新检查兼容性再切换。',
   singbox_not_installed: '请先安装可选 sing-box 内核。',

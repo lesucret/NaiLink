@@ -15,9 +15,9 @@
 
 管理节点、订阅和群组，测试节点延迟，查看实时流量，配置 DNS 与路由。支持电脑、手机和多种主题，沿用路由器 LuCI 登录，无需另设账户。
 
-基于 [daed](https://github.com/daeuniverse/daed) 二次开发，独立维护。当前版本为 **[0.6.38 测试版](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.38)**，提供 IPK / APK v3 安装包。
+基于 [daed](https://github.com/daeuniverse/daed) 二次开发，独立维护。当前版本为 **[0.6.39 测试版](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.39)**，提供 IPK / APK v3 安装包。
 
-本版将节点测试改为可停止、可继续的后台批量任务，sing-box 整批共用测试进程，减少排队和重复启动。补齐 Hysteria 1、SSH、Snell 与 ShadowTLS 组合的导入，导入窗口显示当前内核支持范围。保留现有节点和配置。[查看切换和回退说明 →](docs/core-switching.md)
+本版为 sing-box 补齐 **Naive HTTPS、WireGuard、Tor**，在“代理内核”窗口按需安装扩展协议包，支持 x86_64 / ARM64。普通用户无需下载，不自动切换内核，不更改现有节点和配置。[查看使用方法和限制 →](docs/core-switching.md)
 
 ## 安装前
 
@@ -34,7 +34,7 @@
 以 **root** 登录路由器 SSH，执行下面一行，打开中文菜单：
 
 ```sh
-uclient-fetch -O /tmp/nailink-install.sh https://github.com/slobys/NaiLink/releases/download/openwrt-v0.6.38/install.sh && sh /tmp/nailink-install.sh --menu --release openwrt-v0.6.38
+uclient-fetch -O /tmp/nailink-install.sh https://github.com/slobys/NaiLink/releases/download/openwrt-v0.6.39/install.sh && sh /tmp/nailink-install.sh --menu --release openwrt-v0.6.38
 ```
 
 选择 **1 安装 / 更新**。安装后运行 `nailink` 可再次打开菜单，也可选择 **2 卸载**、**3 检查环境** 或 **0 退出**。

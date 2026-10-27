@@ -1,0 +1,173 @@
+{
+  "format": 1,
+  "tor_version": "0.4.9.13",
+  "openwrt": "24.10.4",
+  "architectures": {
+    "x86_64": [
+      {
+        "name": "tor-basic",
+        "version": "0.4.9.13-r1",
+        "url": "https://downloads.openwrt.org/releases/24.10.4/packages/x86_64/packages/tor-basic_0.4.9.13-r1_x86_64.ipk",
+        "sha256": "bec776c47b4e593b36025d39db60c758a1e22f6e21a660162537a2de14fabccf",
+        "size": 1220409
+      },
+      {
+        "name": "tor-geoip",
+        "version": "0.4.9.13-r1",
+        "url": "https://downloads.openwrt.org/releases/24.10.4/packages/x86_64/packages/tor-geoip_0.4.9.13-r1_x86_64.ipk",
+        "sha256": "d4b27cb014b21ec75809de2e60e37be1ad175206a19b690df37ee8219bf2f78a",
+        "size": 4337918
+      },
+      {
+        "name": "libevent2-7",
+        "version": "2.1.12-r2",
+        "url": "https://downloads.openwrt.org/releases/24.10.4/packages/x86_64/base/libevent2-7_2.1.12-r2_x86_64.ipk",
+        "sha256": "fc845f6d22191f576565339024662228096ebc33d29ba0a2e4a6771cdcd44249",
+        "size": 107721
+      },
+      {
+        "name": "libopenssl3",
+        "version": "3.0.22-r1",
+        "url": "https://downloads.openwrt.org/releases/24.10.4/packages/x86_64/base/libopenssl3_3.0.22-r1_x86_64.ipk",
+        "sha256": "a573dbf1e67a6485d3828daf5ea29fb323128ced238a4f3c6fbdc8feb98fa71d",
+        "size": 2103209
+      },
+      {
+        "name": "zlib",
+        "version": "1.3.1-r1",
+        "url": "https://downloads.openwrt.org/releases/24.10.4/packages/x86_64/base/zlib_1.3.1-r1_x86_64.ipk",
+        "sha256": "e37b84681c6b7ab4521a88efa21aa97d832aaa9a4d7aa5d954bffc81d1a542ce",
+        "size": 44055
+      },
+      {
+        "name": "libcap",
+        "version": "2.69-r1",
+        "url": "https://downloads.openwrt.org/releases/24.10.4/packages/x86_64/base/libcap_2.69-r1_x86_64.ipk",
+        "sha256": "0c246084eb9a9c884b122d777bec7e35925f382c9f5e73deb1484cec8c975a7c",
+        "size": 15886
+      },
+      {
+        "name": "libpthread",
+        "version": "1.2.5-r4",
+        "url": "https://downloads.openwrt.org/releases/24.10.4/targets/x86/64/packages/libpthread_1.2.5-r4_x86_64.ipk",
+        "sha256": "3788206dbc40d69a3f6d3dc158cfea5df1247153889b58cc6d889a0962aa9340",
+        "size": 907
+      },
+      {
+        "name": "librt",
+        "version": "1.2.5-r4",
+        "url": "https://downloads.openwrt.org/releases/24.10.4/targets/x86/64/packages/librt_1.2.5-r4_x86_64.ipk",
+        "sha256": "8d88887f1aeca649f80d0fb7558696194165e4e2bef2596ba72f4a4324bd2ca0",
+        "size": 916
+      }
+    ],
+    "arm64": [
+      {
+        "name": "tor-basic",
+        "version": "0.4.9.13-r1",
+        "url": "https://downloads.openwrt.org/releases/24.10.4/packages/aarch64_generic/packages/tor-basic_0.4.9.13-r1_aarch64_generic.ipk",
+        "sha256": "40b3a36ca01a7d1ede27daa9b33b292265df5c96a9f728c5f19a9efc9ad84c31",
+        "size": 1296000
+      },
+      {
+        "name": "tor-geoip",
+        "version": "0.4.9.13-r1",
+        "url": "https://downloads.openwrt.org/releases/24.10.4/packages/aarch64_generic/packages/tor-geoip_0.4.9.13-r1_aarch64_generic.ipk",
+        "sha256": "990a9ee9df32a7a2c2135dab1fb97e28a36cfcb50c83a8c5252fd8180d353d35",
+        "size": 4338075
+      },
+      {
+        "name": "libevent2-7",
+        "version": "2.1.12-r2",
+        "url": "https://downloads.openwrt.org/releases/24.10.4/packages/aarch64_generic/base/libevent2-7_2.1.12-r2_aarch64_generic.ipk",
+        "sha256": "c379ddcbde67793831b863c012370b2c00679fee18a3676474a9af3e0474b648",
+        "size": 110940
+      },
+      {
+        "name": "libopenssl3",
+        "version": "3.0.22-r1",
+        "url": "https://downloads.openwrt.org/releases/24.10.4/packages/aarch64_generic/base/libopenssl3_3.0.22-r1_aarch64_generic.ipk",
+        "sha256": "35be0ab3ac55c64ef5edbc8a6c629188389355bd32d69cfe9d1e5e4732ff1a58",
+        "size": 1763948
+      },
+      {
+        "name": "zlib",
+        "version": "1.3.1-r1",
+        "url": "https://downloads.openwrt.org/releases/24.10.4/packages/aarch64_generic/base/zlib_1.3.1-r1_aarch64_generic.ipk",
+        "sha256": "1e60688347ac88ab48322d8494e4674abf4a923755ae74e9d880c86bd9f25455",
+        "size": 45548
+      },
+      {
+        "name": "libcap",
+        "version": "2.69-r1",
+        "url": "https://downloads.openwrt.org/releases/24.10.4/packages/aarch64_generic/base/libcap_2.69-r1_aarch64_generic.ipk",
+        "sha256": "14a3de38bd33d4563c5fab7c9e56a97247827a354906398cc59956d052397704",
+        "size": 16707
+      },
+      {
+        "name": "libpthread",
+        "version": "1.2.5-r4",
+        "url": "https://downloads.openwrt.org/releases/24.10.4/targets/armsr/armv8/packages/libpthread_1.2.5-r4_aarch64_generic.ipk",
+        "sha256": "71e60ba6ab8c69d94775f1b9fcbba04ed6386951b7b65464fa269f35cb751af2",
+        "size": 911
+      },
+      {
+        "name": "librt",
+        "version": "1.2.5-r4",
+        "url": "https://downloads.openwrt.org/releases/24.10.4/targets/armsr/armv8/packages/librt_1.2.5-r4_aarch64_generic.ipk",
+        "sha256": "fe49aa6cf3866d8a2975fabeb2db6248bfeab5da6cca7e52035798765dc7b194",
+        "size": 919
+      }
+    ]
+  },
+  "licenses": [
+    {
+      "name": "openssl",
+      "url": "https://raw.githubusercontent.com/openssl/openssl/openssl-3.0.22/LICENSE.txt",
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "libevent",
+      "url": "https://raw.githubusercontent.com/libevent/libevent/release-2.1.12-stable/LICENSE",
+      "sha256": "ff02effc9b331edcdac387d198691bfa3e575e7d244ad10cb826aa51ef085670",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "zlib",
+      "url": "https://raw.githubusercontent.com/madler/zlib/v1.3.1/LICENSE",
+      "sha256": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243",
+      "license": "Zlib"
+    },
+    {
+      "name": "musl",
+      "url": "https://git.musl-libc.org/cgit/musl/plain/COPYRIGHT?h=v1.2.5",
+      "sha256": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af",
+      "license": "MIT"
+    },
+    {
+      "name": "libgcc",
+      "url": "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-13.3.0/COPYING.RUNTIME",
+      "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
+      "license": "GPL-3.0-with-GCC-exception"
+    },
+    {
+      "name": "chromium",
+      "url": "https://raw.githubusercontent.com/SagerNet/naiveproxy/72a06c9fca0e2d228588c7f3074bf7efff3ff686/src/LICENSE",
+      "sha256": "368cca1106be99d39ecd32a38d8305585d802a475effb66380b91ffc9bcf709b",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "tor",
+      "url": "https://dist.torproject.org/tor-0.4.9.13.tar.gz",
+      "sha256": "5e748d3272cdf44a7d7741173f371c8def3d96eecb77e93c89c50663ce9cc792",
+      "member": "tor-0.4.9.13/LICENSE"
+    },
+    {
+      "name": "libcap",
+      "url": "https://www.kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-2.69.tar.xz",
+      "sha256": "f311f8f3dad84699d0566d1d6f7ec943a9298b28f714cae3c931dfd57492d7eb",
+      "member": "libcap-2.69/License"
+    }
+  ]
+}

@@ -66,8 +66,14 @@ async function checkManualLatency(page, context, touch, screenshot) {
   if (/sing-box/.test(await guide.textContent())) {
     await guide.getByRole('button', { name: 'SSH', exact: true }).click()
     await waitText(guide, /内联密钥/)
-    await guide.locator('summary').click()
+    await guide.getByRole('button', { name: 'Naive HTTPS', exact: true }).click()
     await waitText(guide, /Cronet/)
+    await guide.getByRole('button', { name: 'WireGuard', exact: true }).click()
+    await waitText(guide, /用户态 endpoint/)
+    await guide.getByRole('button', { name: 'Tor', exact: true }).click()
+    await waitText(guide, /仅 TCP/)
+    await guide.locator('summary').click()
+    await waitText(guide, /ShadowsocksR \/ Juicity/)
   }
   const guideBox = await guide.boundingBox()
   if (touch) assert.ok(guideBox.x >= 0 && guideBox.x + guideBox.width <= 391, JSON.stringify(guideBox))

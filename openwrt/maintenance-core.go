@@ -21,7 +21,7 @@ import (
 	"github.com/daeuniverse/dae-wing/routercore"
 )
 
-var coreMaintenanceCodes = []string{"core_incompatible", "core_configuration_changed", "singbox_not_installed", "singbox_version_mismatch", "singbox_configuration_invalid", "core_environment_unsupported", "core_network_conflict", "core_rolled_back", "core_rollback_failed", "core_cleanup_failed", "core_stop_failed", "core_state_failed", "core_snapshot_failed", "core_start_failed", "core_not_ready", "core_connectivity_failed", "core_dependency_failed", "core_exited", "core_not_running", "nftables_unavailable"}
+var coreMaintenanceCodes = []string{"extra_not_installed", "extra_dependency_failed", "extra_rollback_failed", "core_incompatible", "core_configuration_changed", "singbox_not_installed", "singbox_version_mismatch", "singbox_configuration_invalid", "core_environment_unsupported", "core_network_conflict", "core_rolled_back", "core_rollback_failed", "core_cleanup_failed", "core_stop_failed", "core_state_failed", "core_snapshot_failed", "core_start_failed", "core_not_ready", "core_connectivity_failed", "core_dependency_failed", "core_exited", "core_not_running", "nftables_unavailable"}
 
 func coreMaintenanceCode(message string) string {
 	if message == "core_request_failed" {
@@ -48,7 +48,7 @@ func uncertainCoreJob(job maintenanceJob) bool {
 }
 func coreMaintenanceAction(action string) bool {
 	switch action {
-	case "core_check_dae", "core_check_singbox", "core_install_singbox", "core_switch_dae", "core_switch_singbox":
+	case "core_check_dae", "core_check_singbox", "core_install_singbox", "core_install_extra", "core_switch_dae", "core_switch_singbox":
 		return true
 	}
 	return false
@@ -71,13 +71,15 @@ func (m *maintenanceManager) reconcileCoreJob(job *maintenanceJob) {
 }
 
 type coreMaintenanceStatus struct {
-	Current   string           `json:"current"`
-	Phase     string           `json:"phase"`
-	Code      string           `json:"code,omitempty"`
-	Installed bool             `json:"installed"`
-	Supported bool             `json:"supported"`
-	Version   string           `json:"version"`
-	Plan      *routercore.Plan `json:"plan,omitempty"`
+	Current      string           `json:"current"`
+	Phase        string           `json:"phase"`
+	Code         string           `json:"code,omitempty"`
+	Installed    bool             `json:"installed"`
+	Supported    bool             `json:"supported"`
+	Version      string           `json:"version"`
+	Extra        bool             `json:"extra"`
+	ExtraVersion string           `json:"extra_version"`
+	Plan         *routercore.Plan `json:"plan,omitempty"`
 }
 type storedCorePlan struct {
 	Plan    routercore.Plan `json:"plan"`
@@ -96,7 +98,8 @@ func (m *maintenanceManager) coreStatus() *coreMaintenanceStatus {
 		return &coreMaintenanceStatus{Current: "unknown", Phase: "failed", Code: "unsafe_state"}
 	}
 	_, supported := routercore.Releases[runtime.GOARCH]
-	status := &coreMaintenanceStatus{Current: state.Current, Phase: state.Phase, Code: state.Code, Supported: supported, Version: routercore.SingBoxVersion}
+	_, extraErr := routercore.ExtraDirectory(m.extraPath())
+	status := &coreMaintenanceStatus{Extra: extraErr == nil, ExtraVersion: routercore.ExtraVersion, Current: state.Current, Phase: state.Phase, Code: state.Code, Supported: supported, Version: routercore.SingBoxVersion}
 	if st, err := os.Lstat(m.corePath()); err == nil && st.Mode().IsRegular() && st.Mode().Perm()&0022 == 0 && st.Mode().Perm()&0111 != 0 {
 		status.Installed = true
 	}
@@ -112,6 +115,9 @@ func (m *maintenanceManager) maintainCore(ctx context.Context, job *maintenanceJ
 		return errors.New("busy")
 	}
 	defer lock.Close()
+	if job.Action == "core_install_extra" {
+		return m.installExtra(ctx, job)
+	}
 	if job.Action == "core_install_singbox" {
 		return m.installSingBox(ctx, job)
 	}
@@ -355,4 +361,247 @@ func validateSingboxELF(path, arch string) error {
 		}
 	}
 	return nil
+}
+
+func (m *maintenanceManager) extraPath() string {
+	if m.extraRoot != "" {
+		return m.extraRoot
+	}
+	return routercore.ExtraRoot
+}
+
+// Stage the entire bundle before publishing one atomic link. Existing versions
+// remain intact for any process using them; a download never stops the proxy.
+func (m *maintenanceManager) installExtra(ctx context.Context, job *maintenanceJob) error {
+	release, ok := routercore.ExtraReleases[runtime.GOARCH]
+	if !ok {
+		return errors.New("unsupported")
+	}
+	state, err := routercore.ReadState(m.configDir)
+	if err != nil {
+		return errors.New("unsafe_state")
+	}
+	if state.Current == "sing-box" {
+		return errors.New("busy")
+	}
+	root := m.extraPath()
+	if err = privateDirectory(root); err != nil {
+		return errors.New("unsafe_state")
+	}
+	var stat syscall.Statfs_t
+	if syscall.Statfs(root, &stat) != nil || uint64(stat.Bavail)*uint64(stat.Bsize) < 400<<20 {
+		return errors.New("no_space")
+	}
+	temporary, err := os.MkdirTemp(root, ".extra-stage-")
+	if err != nil {
+		return errors.New("state_failed")
+	}
+	defer os.RemoveAll(temporary)
+	archive := filepath.Join(temporary, "extra.tar.gz")
+	if err = m.save(job, "downloading"); err != nil {
+		return err
+	}
+	if m.fetch(ctx, "https://github.com/slobys/NaiLink/releases/download/"+routercore.ExtraRelease+"/"+release.Archive, archive, 128<<20) != nil {
+		return errors.New("download_failed")
+	}
+	f, err := os.Open(archive)
+	if err != nil {
+		return errors.New("download_failed")
+	}
+	hash := sha256.New()
+	_, err = io.Copy(hash, f)
+	f.Close()
+	if err != nil || hex.EncodeToString(hash.Sum(nil)) != release.SHA256 {
+		return errors.New("checksum_failed")
+	}
+	if err = m.save(job, "verifying"); err != nil {
+		return err
+	}
+	stage := filepath.Join(temporary, "bundle")
+	if err = extractExtra(archive, stage, release.CPU); err != nil {
+		return err
+	}
+	if err = validateSingboxELF(filepath.Join(stage, "sing-box"), runtime.GOARCH); err != nil {
+		return err
+	}
+	output, err := m.run(ctx, filepath.Join(stage, "sing-box"), "version")
+	if err != nil || !strings.HasPrefix(string(output), "sing-box version "+routercore.ExtraVersion+"\n") {
+		return errors.New("singbox_version_mismatch")
+	}
+	output, err = m.run(ctx, filepath.Join(stage, "tor-launch"), "--version")
+	if err != nil || !strings.HasPrefix(string(output), "Tor version "+routercore.TorVersion+".") {
+		return errors.New("extra_dependency_failed")
+	}
+	// Validate the previous pointer before replacing it, and preserve it if
+	// persistence fails. No configuration/database files are touched here.
+	link := filepath.Join(root, "extra")
+	previous, readErr := os.Readlink(link)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return errors.New("unsafe_state")
+	}
+	if readErr == nil {
+		if _, err = routercore.ExtraDirectory(root); err != nil {
+			return errors.New("unsafe_state")
+		}
+	}
+	target := filepath.Join(root, "extra-"+release.SHA256[:16])
+	if _, err = os.Lstat(target); err == nil {
+		// A prior interrupted attempt is left for inspection, never overwritten.
+		target += "-" + job.ID
+	} else if !os.IsNotExist(err) {
+		return errors.New("state_failed")
+	}
+	if err = os.Rename(stage, target); err != nil {
+		return errors.New("state_failed")
+	}
+	removeTarget := true
+	defer func() {
+		if removeTarget {
+			_ = os.RemoveAll(target)
+		}
+	}()
+	next := filepath.Join(temporary, "next")
+	if err = os.Symlink(filepath.Base(target), next); err != nil {
+		return errors.New("state_failed")
+	}
+	if err = os.Rename(next, link); err != nil {
+		return errors.New("state_failed")
+	}
+	parent, err := os.Open(root)
+	if err == nil {
+		err = parent.Sync()
+		parent.Close()
+	}
+	if err != nil {
+		if previous != "" {
+			_ = os.Symlink(previous, next)
+			if os.Rename(next, link) != nil {
+				removeTarget = false
+				return errors.New("extra_rollback_failed")
+			}
+		} else if os.Remove(link) != nil {
+			removeTarget = false
+			return errors.New("extra_rollback_failed")
+		}
+		return errors.New("state_failed")
+	}
+	removeTarget = false
+	// Old versions deliberately remain until the next plugin uninstall; never
+	// delete a live executable or a Tor database as part of component updates.
+	_ = os.Remove(filepath.Join(m.stateDir, "core-plan.json"))
+	return nil
+}
+
+type extraFile struct {
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+	Mode   int64  `json:"mode"`
+}
+type extraManifest struct {
+	Version string               `json:"version"`
+	CPU     string               `json:"cpu"`
+	Files   map[string]extraFile `json:"files"`
+}
+
+func extractExtra(archive, stage, cpu string) error {
+	if err := privateDirectory(stage); err != nil {
+		return errors.New("unsafe_state")
+	}
+	f, err := os.Open(archive)
+	if err != nil {
+		return errors.New("invalid_release")
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return errors.New("invalid_release")
+	}
+	defer gz.Close()
+	reader := tar.NewReader(io.LimitReader(gz, 300<<20))
+	seen := map[string]extraFile{}
+	var manifest extraManifest
+	manifestSeen := false
+	count := 0
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return errors.New("invalid_release")
+		}
+		name := header.Name
+		count++
+		if count > 96 || name == "" || filepath.IsAbs(name) || filepath.Clean(name) != name || strings.Contains(name, "\\") || strings.HasPrefix(name, "..") || header.Typeflag != tar.TypeReg || header.Size < 1 || header.Size > 160<<20 {
+			return errors.New("invalid_release")
+		}
+		if _, exists := seen[name]; exists {
+			return errors.New("invalid_release")
+		}
+		if name == "manifest.json" {
+			if manifestSeen || header.Size > 32768 {
+				return errors.New("invalid_release")
+			}
+			manifestSeen = true
+			raw, err := io.ReadAll(io.LimitReader(reader, header.Size+1))
+			if err != nil || int64(len(raw)) != header.Size || json.Unmarshal(raw, &manifest) != nil {
+				return errors.New("invalid_release")
+			}
+			continue
+		}
+		if name != "sing-box" && name != "tor-launch" && name != "SOURCE.json" && !strings.HasPrefix(name, "licenses/") && !strings.HasPrefix(name, "tor/bin/") && !strings.HasPrefix(name, "tor/lib/") && !strings.HasPrefix(name, "tor/share/") {
+			return errors.New("invalid_release")
+		}
+		path := filepath.Join(stage, name)
+		if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			return errors.New("state_failed")
+		}
+		out, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if err != nil {
+			return errors.New("state_failed")
+		}
+		hash := sha256.New()
+		n, copyErr := io.Copy(io.MultiWriter(out, hash), io.LimitReader(reader, header.Size+1))
+		syncErr := out.Sync()
+		closeErr := out.Close()
+		if copyErr != nil || syncErr != nil || closeErr != nil || n != header.Size {
+			return errors.New("invalid_release")
+		}
+		mode := header.Mode & 0777
+		if mode != 0644 && mode != 0755 {
+			return errors.New("invalid_release")
+		}
+		if err = os.Chmod(path, os.FileMode(mode)&0700); err != nil {
+			return errors.New("state_failed")
+		}
+		seen[name] = extraFile{hex.EncodeToString(hash.Sum(nil)), n, mode}
+	}
+	if manifest.Version != routercore.ExtraVersion || manifest.CPU != cpu || len(manifest.Files) != len(seen) {
+		return errors.New("invalid_release")
+	}
+	for name, expected := range manifest.Files {
+		if seen[name] != expected {
+			return errors.New("invalid_release")
+		}
+	}
+	for _, name := range []string{"sing-box", "tor-launch", "tor/bin/tor", "tor/share/geoip", "tor/share/geoip6", "SOURCE.json", "licenses/NOTICE.txt"} {
+		if _, ok := seen[name]; !ok {
+			return errors.New("invalid_release")
+		}
+	}
+	// Persist nested directory entries as well as file contents before publish.
+	return filepath.WalkDir(stage, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		d, e := os.Open(path)
+		if e != nil {
+			return e
+		}
+		defer d.Close()
+		return d.Sync()
+	})
 }

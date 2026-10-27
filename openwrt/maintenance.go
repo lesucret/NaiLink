@@ -68,7 +68,7 @@ type maintenanceStatus struct {
 }
 type maintenanceManager struct {
 	stateDir, configDir, versionFile, lockFile, installLock, initScript string
-	coreBinary                                                          string
+	coreBinary, extraRoot                                               string
 	fetch                                                               func(context.Context, string, string, int64) error
 	run                                                                 func(context.Context, ...string) ([]byte, error)
 	graph                                                               func(context.Context, string, any) error
@@ -533,7 +533,7 @@ func maintenanceDownload(ctx context.Context, address, destination string, limit
 		transport = copy
 		defer copy.CloseIdleConnections()
 	}
-	client := &http.Client{Transport: transport, Timeout: 180 * time.Second, CheckRedirect: func(r *http.Request, via []*http.Request) error {
+	client := &http.Client{Transport: transport, Timeout: 300 * time.Second, CheckRedirect: func(r *http.Request, via []*http.Request) error {
 		if len(via) > 5 || !allowed(r.URL) {
 			return errors.New("redirect_rejected")
 		}
@@ -623,7 +623,7 @@ func (m *maintenanceManager) graphQL(ctx context.Context, query string, value an
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+token)
-	response, err := (&http.Client{Timeout: 180 * time.Second, Transport: &http.Transport{Proxy: nil}}).Do(request)
+	response, err := (&http.Client{Timeout: 300 * time.Second, Transport: &http.Transport{Proxy: nil}}).Do(request)
 	if err != nil {
 		return errors.New("backend_unavailable")
 	}
@@ -665,7 +665,7 @@ func maintenanceCLI(command, configDir, jobID string) {
 	switch command {
 	case "status":
 		json.NewEncoder(os.Stdout).Encode(manager.status())
-	case "check", "update", "geodata", "core_check_dae", "core_check_singbox", "core_install_singbox", "core_switch_dae", "core_switch_singbox":
+	case "check", "update", "geodata", "core_check_dae", "core_check_singbox", "core_install_singbox", "core_install_extra", "core_switch_dae", "core_switch_singbox":
 		json.NewEncoder(os.Stdout).Encode(manager.start(command))
 	case "worker":
 		if !regexp.MustCompile(`^[a-f0-9]{24}$`).MatchString(jobID) {

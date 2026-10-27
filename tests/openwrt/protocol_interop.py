@@ -63,7 +63,7 @@ def port(udp=False):
 
 
 def run(args):
-    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), HTTP) as http_server, socketserver.UDPServer(("127.0.0.1", 0), UDP) as udp:
+    with http.server.ThreadingHTTPServer((args.fixture_address, 0), HTTP) as http_server, socketserver.UDPServer((args.fixture_address, 0), UDP) as udp:
         for server in (http_server, udp):
             threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
@@ -100,9 +100,35 @@ def run_fixture(args, http_port, udp_port):
         pair = subprocess.check_output([str(args.sing_box), 'generate', 'reality-keypair'], text=True)
         reality_keys = dict(line.split(': ', 1) for line in pair.strip().splitlines())
         inbounds, cases, native_cases = [], [], []
+        endpoints = []
         def native_case(name, value, family, tcp_only=False):
             encoded = base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip('=')
             native_cases.append({'Name': name, 'Link': 'singbox://' + encoded, 'Family': family, 'TCPOnly': tcp_only})
+        if args.client_extra:
+            naive_port = port()
+            inbounds.append({'type':'naive','tag':'naive','listen':'127.0.0.1','listen_port':naive_port,'network':'tcp',
+                             'users':[{'username':'fixture','password':'fixture'}],'tls':vless_tls})
+            for uot in (False,True):
+                node={'type':'naive','server':'127.0.0.1','server_port':naive_port,'username':'fixture','password':'fixture',
+                      'tls':{'enabled':True,'server_name':'vless.fixture.test','certificate':[(work/'vless-cert.pem').read_text()]}}
+                if uot: node['udp_over_tcp']={'enabled':True,'version':2}
+                native_case('naive-cronet'+('-uot' if uot else ''),node,'naive',not uot)
+            node['tls']['server_name']='wrong.fixture.invalid'
+            native_case('naive-reject-certificate',node,'naive-negative',True)
+            native_cases[-1]['Failure']='tls_failed'
+            keys=[]
+            for _ in range(2):
+                pair=subprocess.check_output([str(args.sing_box),'generate','wg-keypair'],text=True)
+                keys.append(dict(line.split(': ',1) for line in pair.strip().splitlines()))
+            wg_port=port(True)
+            endpoints.append({'type':'wireguard','tag':'wireguard-server','system':False,'address':['10.66.66.1/32'],
+                              'private_key':keys[0]['PrivateKey'],'listen_port':wg_port,'workers':1,
+                              'peers':[{'public_key':keys[1]['PublicKey'],'allowed_ips':['10.66.66.2/32']}]})
+            native_case('wireguard-endpoint',{'type':'wireguard','system':False,'private_key':keys[1]['PrivateKey'],
+                        'address':['10.66.66.2/32'],'peers':[{'address':'127.0.0.1','port':wg_port,'public_key':keys[0]['PublicKey'],
+                        'allowed_ips':['0.0.0.0/0']}]} ,'wireguard')
+            native_cases[-1]['TargetAlt']=f'http://10.66.66.1:{http_port}'
+            native_cases[-1]['UDPAlt']=f'10.66.66.1:{udp_port}'
         h1 = port(True)
         inbounds.append({'type': 'hysteria', 'tag': 'hysteria1', 'listen': '127.0.0.1', 'listen_port': h1,
                          'up_mbps': 20, 'down_mbps': 100, 'users': [{'auth_str': 'fixture'}], 'tls': vless_tls})
@@ -245,9 +271,9 @@ def run_fixture(args, http_port, udp_port):
                 'congestion_control': 'cubic', 'log_level': 'error'}), encoding='utf-8')
             cases.append({'Name': 'juicity', 'Link': f'juicity://{uuid}:fixture%40pass%3A2026@127.0.0.1:{number}?sni=vless.fixture.test&congestion_control=cubic'})
         config = work / "config.json"
-        config.write_text(json.dumps({"log": {"level": "error"}, "inbounds": inbounds, "outbounds": [{"type": "direct", "tag": "direct"}]}), encoding="utf-8")
+        config.write_text(json.dumps({"log": {"level": "error"}, "inbounds": inbounds, "endpoints": endpoints, "outbounds": [{"type": "direct", "tag": "direct"}]}), encoding="utf-8")
         casefile = work / "cases.json"
-        casefile.write_text(json.dumps({"Target": f"http://127.0.0.1:{http_port}", "UDP": f"127.0.0.1:{udp_port}", "Cases": cases, "NativeCases":native_cases}), encoding="utf-8")
+        casefile.write_text(json.dumps({"Target": f"http://{args.fixture_address}:{http_port}", "UDP": f"{args.fixture_address}:{udp_port}", "Cases": cases, "NativeCases":native_cases}), encoding="utf-8")
         subprocess.run([str(args.sing_box), "check", "-c", str(config)], check=True)
         with (work / "server.log").open("w", encoding="utf-8") as log:
             process = subprocess.Popen([str(args.sing_box), "run", "-c", str(config)], stdout=log, stderr=subprocess.STDOUT)
@@ -263,6 +289,8 @@ def run_fixture(args, http_port, udp_port):
                 env["SSL_CERT_FILE"] = str(work / "vless-cert.pem")
                 if args.client_singbox:
                     env['DAED_TEST_SINGBOX'] = str(args.client_singbox.resolve(strict=True))
+                if args.client_extra:
+                    env['DAED_TEST_SINGBOX_EXTRA'] = str(args.client_extra.resolve(strict=True))
                 return subprocess.run(["go", "test", "-count=1", "-timeout=180s", "-v", "./graphql/service/node", "./dae", "github.com/daeuniverse/dae/control", "-run", "TestRouterProtocolInteroperability$|TestRouterCoreProtocolInteroperability$|TestRouterCoreBulkProbe$|TestRouterHTTPProtocolDownload$|TestRouterConnectionProtocolFailover$"], cwd=args.wing, env=env).returncode
             finally:
                 process.terminate()
@@ -278,4 +306,6 @@ if __name__ == "__main__":
     parser.add_argument("--sing-box", type=Path, required=True)
     parser.add_argument("--juicity-server", type=Path, help="Optional independent official Juicity server (tested with v0.5.0)")
     parser.add_argument('--client-singbox', type=Path, help='Also exercise the optional native sing-box adapter')
+    parser.add_argument('--fixture-address', default='127.0.0.1', help='Non-loopback local address for userspace WireGuard tests')
+    parser.add_argument('--client-extra', type=Path, help='Extracted optional extension bundle')
     raise SystemExit(run(parser.parse_args()))

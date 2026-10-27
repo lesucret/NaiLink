@@ -22,8 +22,8 @@ import (
 )
 
 type routerInteropCase struct {
-	Name, Link, Failure, Family string
-	TCPOnly                     bool
+	Name, Link, Failure, Family, TargetAlt, UDPAlt string
+	TCPOnly                                        bool
 }
 
 // Use independent protocol servers, not mocked dialers or the embedded dae
@@ -47,6 +47,28 @@ func TestRouterCoreProtocolInteroperability(t *testing.T) {
 	}
 	conf, _ := coreFixtureConfig(t)
 	conf.Dns.Upstream = []daeConfig.KeyableString{daeConfig.KeyableString("fixture:udp://" + fixture.UDP)}
+	if bundle := os.Getenv("DAED_TEST_SINGBOX_EXTRA"); bundle != "" {
+		root := filepath.Join(t.TempDir(), "components")
+		if err := os.Mkdir(root, 0700); err != nil {
+			t.Fatal(err)
+		}
+		// Keep the production directory contract; the bundle is immutable input.
+		if err := os.Symlink(bundle, filepath.Join(root, "extra-fixture")); err != nil {
+			t.Fatal(err)
+		}
+		// ExtraDirectory requires a real child, so copy the small fixture tree.
+		_ = os.Remove(filepath.Join(root, "extra-fixture"))
+		if out, err := exec.Command("cp", "-a", bundle, filepath.Join(root, "extra-fixture")).CombinedOutput(); err != nil {
+			t.Fatal(string(out), err)
+		}
+		_ = os.Chmod(filepath.Join(root, "extra-fixture"), 0700)
+		if err := os.Symlink("extra-fixture", filepath.Join(root, "extra")); err != nil {
+			t.Fatal(err)
+		}
+		oldRoot, oldData := routerExtraRoot, routerTorDataRoot
+		routerExtraRoot, routerTorDataRoot = root, filepath.Join(t.TempDir(), "tor-data")
+		t.Cleanup(func() { routerExtraRoot, routerTorDataRoot = oldRoot, oldData })
+	}
 	oldBinary, oldDir := routerSingBoxBinary, routerCoreRuntimeDir
 	previous := currentRouterCoreManager()
 	routerSingBoxBinary, routerCoreRuntimeDir = binary, filepath.Join(t.TempDir(), "private-core")
@@ -59,7 +81,7 @@ func TestRouterCoreProtocolInteroperability(t *testing.T) {
 		routerCoreGlobal.manager = previous
 		routerCoreGlobal.Unlock()
 	})
-	global := daeConfig.Global{TcpCheckUrl: []string{fixture.Target + "/generate_204"}, UdpCheckDns: []string{fixture.UDP}}
+	global := daeConfig.Global{WanInterface: []string{"lo"}, TcpCheckUrl: []string{fixture.Target + "/generate_204"}, UdpCheckDns: []string{fixture.UDP}}
 	var links []string
 	var cases []routerInteropCase
 	for _, c := range append(fixture.Cases, fixture.NativeCases...) {
@@ -79,6 +101,10 @@ func TestRouterCoreProtocolInteroperability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	program, _, err := routerPrepareExtra(ctx, profile, true)
+	if err != nil {
+		t.Fatal(err)
+	}
 	checkPath := filepath.Join(t.TempDir(), "profile.json")
 	data, err = json.Marshal(profile)
 	if err != nil {
@@ -87,12 +113,26 @@ func TestRouterCoreProtocolInteroperability(t *testing.T) {
 	if err = os.WriteFile(checkPath, data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.CommandContext(ctx, binary, "check", "-c", checkPath).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(ctx, program, "check", "-c", checkPath).CombinedOutput(); err != nil {
 		t.Fatalf("native configuration: %s: %v", out, err)
 	}
 	results, err := ProbeRouterCoreNodes(ctx, links, global)
 	if err != nil {
-		t.Fatal(err)
+		debugCtx, debugCancel := context.WithTimeout(ctx, 2*time.Second)
+		defer debugCancel()
+		output, _ := exec.CommandContext(debugCtx, program, "run", "--disable-color", "-c", checkPath).CombinedOutput()
+		t.Fatalf("%v: fixture startup: %s", err, output)
+	}
+	for i, c := range cases {
+		if c.TargetAlt != "" {
+			local := global
+			local.TcpCheckUrl = []string{c.TargetAlt + "/generate_204"}
+			measured, e := ProbeRouterCoreNodes(ctx, []string{c.Link}, local)
+			if e != nil {
+				t.Fatal(e)
+			}
+			results[i] = measured[0]
+		}
 	}
 	session, err := routerStartProbe(ctx, probeConf)
 	if err != nil {
@@ -118,8 +158,12 @@ func TestRouterCoreProtocolInteroperability(t *testing.T) {
 			transport := &http.Transport{DialContext: dialer.(proxy.ContextDialer).DialContext}
 			defer transport.CloseIdleConnections()
 			client := &http.Client{Transport: transport, Timeout: 6 * time.Second}
+			target := fixture.Target
+			if c.TargetAlt != "" {
+				target = c.TargetAlt
+			}
 			for _, endpoint := range []string{"/payload", "/stream"} {
-				response, err := client.Get(fixture.Target + endpoint)
+				response, err := client.Get(target + endpoint)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -138,13 +182,65 @@ func TestRouterCoreProtocolInteroperability(t *testing.T) {
 			}
 			if !c.TCPOnly && !udpSeen[family] {
 				udpSeen[family] = true
-				result, err := ProbeRouterCoreUDP(ctx, c.Link, global)
+				udpGlobal := global
+				if c.UDPAlt != "" {
+					udpGlobal.UdpCheckDns = []string{c.UDPAlt}
+				}
+				result, err := ProbeRouterCoreUDP(ctx, c.Link, udpGlobal)
 				if err != nil || !result.Alive {
 					t.Fatal("native UDP DNS failed", result, err)
 				}
 			}
 		})
 	}
+	if os.Getenv("DAED_TEST_SINGBOX_EXTRA") != "" {
+		t.Run("bounded-extra-batch", func(t *testing.T) {
+			var link string
+			for _, c := range cases {
+				if c.Name == "naive-cronet" {
+					link = c.Link
+					break
+				}
+			}
+			if link == "" {
+				t.Fatal("missing Naive fixture")
+			}
+			directory, e := routercore.ExtraDirectory(routerExtraRoot)
+			if e != nil {
+				t.Fatal(e)
+			}
+			native := filepath.Join(directory, "sing-box")
+			real := filepath.Join(directory, "real-native")
+			if e = os.Rename(native, real); e != nil {
+				t.Fatal(e)
+			}
+			defer func() { _ = os.Remove(native); _ = os.Rename(real, native) }()
+			count := filepath.Join(t.TempDir(), "starts")
+			script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = run ]; then echo started >> '%s'; fi\nexec '%s' \"$@\"\n", count, real)
+			if e = os.WriteFile(native, []byte(script), 0700); e != nil {
+				t.Fatal(e)
+			}
+			input := make([]string, 9)
+			for i := range input {
+				input[i] = link
+			}
+			values, e := ProbeRouterCoreNodes(ctx, input, global)
+			if e != nil {
+				t.Fatal(e)
+			}
+			for _, value := range values {
+				if !value.Alive {
+					t.Fatal("extra bulk request failed", value)
+				}
+			}
+			starts, e := os.ReadFile(count)
+			if e != nil || len(strings.Fields(string(starts))) != 2 {
+				t.Fatal("extra resources were not split into bounded batches", string(starts), e)
+			}
+			t.Log("9 Naive nodes used two sequential native batches; ordinary 72-node batch remains shared")
+		})
+	}
+
 }
 
 // A large batch shares one process; an invalid native config must not poison it.

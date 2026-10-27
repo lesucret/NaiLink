@@ -10,7 +10,21 @@ import (
 )
 
 func RouterCoreCapabilities() string {
-	data, _ := json.Marshal(map[string]any{"current": RouterCoreName(), "engines": routercore.ProtocolCapabilities()})
+	engines := routercore.ProtocolCapabilities()
+	_, extraErr := routercore.ExtraDirectory(routerExtraRoot)
+	if extraErr != nil {
+		for i := range engines {
+			if engines[i].ID == "sing-box" {
+				for j := range engines[i].Protocols {
+					p := &engines[i].Protocols[j]
+					if p.Name == "Naive HTTPS" || p.Name == "WireGuard" || p.Name == "Tor" {
+						p.Note = "扩展协议包尚未安装。" + p.Note
+					}
+				}
+			}
+		}
+	}
+	data, _ := json.Marshal(map[string]any{"current": RouterCoreName(), "engines": engines, "extra_installed": extraErr == nil})
 	return string(data)
 }
 func routerDaeNodeProblems(conf *daeConfig.Config) []string {

@@ -1,9 +1,17 @@
 # NaiLink · 奶油互联
 
 支持 OpenWrt、ImmortalWrt、iStoreOS 的现代 LuCI，提供 x86_64 / ARM64 及试验性 ARMv7 / MIPS32 / MIPSel32 的
-IPK 和 APK v3 安装包。当前测试版：[openwrt-v0.6.38](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.38)。
+IPK 和 APK v3 安装包。当前测试版：[openwrt-v0.6.39](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.39)。
 
 本项目从 0.6.14 起更名为 NaiLink（奶油互联），侧边栏显示 **NaiLink**。0.6.13 及更早版本显示 **Daed**。沿用原有包名、服务、路径和配置，可继续保留数据升级。
+
+## 0.6.39 扩展协议包
+
+- 在“代理内核”窗口按需安装，限 x86_64 / ARM64。下载约 30 MiB，预留 400 MiB 安装空间；不使用时不启动 Tor。
+- Naive HTTPS 使用 Cronet，默认 8 MiB 接收窗口；WireGuard 使用用户态 endpoint，默认 1 个工作线程。
+- Tor 仅支持 TCP，每个运行配置最多 1 个，首次引导可能较慢；复用私有缓存，程序崩溃或切换后清理子进程。
+- 校验完整包、版本、架构及私有依赖后才替换组件指针；下载失败保留旧组件和全部配置。
+- ARMv7 / MIPS 不提供扩展包，也不改变既有透明代理限制。[协议格式与限制](../docs/core-switching.md)。
 
 ## 0.6.38 批量测试与原生协议
 
@@ -11,7 +19,7 @@ IPK 和 APK v3 安装包。当前测试版：[openwrt-v0.6.38](https://github.co
 - sing-box 整批共享一个私有测试进程，最多 8 个并行 HTTP 请求；排队与进程启动不计入节点延迟，HTTP 超时与 dae 统一为 3 秒。不扣减真实连接和握手耗时。
 - 原生配置错误按节点隔离，不拖累整批。切换内核会取消旧任务，防止旧结果混入新内核；临时进程不接管 TUN，不改用户配置。
 - 增加 Hysteria 1、SSH、Snell 4/6 URI，以及 sing-box 单出站 / 封闭出站组合 JSON，支持 ShadowTLS 组合。原生节点提供 JSON 编辑；切回 dae 前会明确指出不兼容节点。
-- 导入窗口显示当前内核协议、链接格式和组件限制。固定内核尚未编译 Naive/Cronet、WireGuard，未捆绑 Tor；SSR、Juicity 不由 sing-box 实现。
+- 导入窗口显示当前内核协议、链接格式和组件限制。0.6.39 可按需安装 Naive/Cronet、WireGuard 与私有 Tor 扩展包；SSR、Juicity 不由 sing-box 实现。
 - 无数据库迁移和新依赖；普通 Linux/Docker 保留原测试接口。
 
 ## 0.6.37 节点延迟对比修复

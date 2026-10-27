@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-var nativeProxyTypes = map[string]bool{"socks": true, "http": true, "shadowsocks": true, "vmess": true, "vless": true, "trojan": true, "hysteria": true, "hysteria2": true, "tuic": true, "anytls": true, "ssh": true, "snell": true, "shadowtls": true}
+var nativeProxyTypes = map[string]bool{"socks": true, "http": true, "shadowsocks": true, "vmess": true, "vless": true, "trojan": true, "hysteria": true, "hysteria2": true, "tuic": true, "anytls": true, "ssh": true, "snell": true, "shadowtls": true, "naive": true, "wireguard": true, "tor": true}
 
 // Native outbounds stay inside a node's private namespace. They cannot add
 // listeners, routes, services, local file reads, commands or external detours.
@@ -28,25 +28,36 @@ func NativeNode(link, tag string) (Object, error) {
 		return nil, errors.New("invalid_native_node")
 	}
 	var list []Object
-	if entries, ok := root["outbounds"]; ok {
-		if len(root) > 2 {
+	_, hasOutbounds := root["outbounds"]
+	_, hasEndpoints := root["endpoints"]
+	if hasOutbounds || hasEndpoints {
+		if len(root) > 3 {
 			return nil, errors.New("unsupported_native_section")
 		}
 		for k := range root {
-			if k != "outbounds" && k != "tag" {
+			if k != "outbounds" && k != "endpoints" && k != "tag" {
 				return nil, errors.New("unsupported_native_section")
 			}
 		}
-		values, ok := entries.([]any)
-		if !ok || len(values) == 0 || len(values) > 16 {
-			return nil, errors.New("invalid_native_node")
-		}
-		for _, v := range values {
-			o, ok := v.(map[string]any)
-			if !ok {
+		for _, section := range []string{"outbounds", "endpoints"} {
+			entries, exists := root[section]
+			if !exists {
+				continue
+			}
+			values, ok := entries.([]any)
+			if !ok || len(values) == 0 || len(values) > 16 {
 				return nil, errors.New("invalid_native_node")
 			}
-			list = append(list, o)
+			for _, v := range values {
+				o, ok := v.(map[string]any)
+				if !ok || section == "endpoints" && o["type"] != "wireguard" {
+					return nil, errors.New("invalid_native_node")
+				}
+				list = append(list, o)
+			}
+		}
+		if len(list) > 16 {
+			return nil, errors.New("invalid_native_node")
 		}
 	} else {
 		list = []Object{root}
@@ -70,9 +81,13 @@ func NativeNode(link, tag string) (Object, error) {
 		if !nativeProxyTypes[kind] {
 			return nil, errors.New("unsupported_protocol")
 		}
+		extra, err := validateExtraNode(o, kind)
+		if err != nil {
+			return nil, err
+		}
 		host, ok := o["server"].(string)
 		port, pok := o["server_port"].(float64)
-		if !ok || host == "" || strings.ContainsAny(host, " /\\\x00\r\n\t@") || !pok || port < 1 || port > 65535 || port != float64(int(port)) {
+		if !extra && (!ok || host == "" || strings.ContainsAny(host, " /\\\x00\r\n\t@") || !pok || port < 1 || port > 65535 || port != float64(int(port))) {
 			return nil, errors.New("invalid_native_node")
 		}
 		name, _ := o["tag"].(string)
@@ -86,6 +101,11 @@ func NativeNode(link, tag string) (Object, error) {
 		original[name] = o
 		if err := checkNativeFields(o); err != nil {
 			return nil, err
+		}
+		if kind == "naive" {
+			if _, exists := o["stream_receive_window"]; !exists {
+				o["stream_receive_window"] = "8MB"
+			}
 		}
 	}
 	main, _ := root["tag"].(string)
@@ -124,13 +144,25 @@ func NativeNode(link, tag string) (Object, error) {
 			}
 		}
 	}
+	reachable := map[string]bool{}
+	for name := main; name != ""; {
+		reachable[name] = true
+		next, _ := original[name]["detour"].(string)
+		name = next
+	}
 	names[main] = tag
 	var children []Object
 	for name, o := range original {
+		if !reachable[name] {
+			continue
+		}
 		if next, ok := o["detour"].(string); ok {
 			o["detour"] = names[next]
 		}
 		o["tag"] = names[name]
+		if o["type"] == "tor" {
+			o["_nailink_tor_identity"] = extraSourceIdentity(raw)
+		}
 		if name != main {
 			children = append(children, o)
 		}
@@ -183,7 +215,11 @@ func NativeNodeMetadata(link string) (name, address, protocol string, err error)
 		return "", "", "", err
 	}
 	protocol = node["type"].(string)
-	address = net.JoinHostPort(node["server"].(string), strconv.Itoa(int(node["server_port"].(float64))))
+	if special, kind, ok := nativeExtraMetadata(node); ok {
+		address, protocol = special, kind
+	} else {
+		address = net.JoinHostPort(node["server"].(string), strconv.Itoa(int(node["server_port"].(float64))))
+	}
 	var original Object
 	raw, _ := decode64(strings.TrimPrefix(link, "singbox://"))
 	_ = json.Unmarshal(raw, &original)

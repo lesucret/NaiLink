@@ -14,7 +14,7 @@ on:
     inputs:
       version:
         description: 'Package version (X.Y.Z), must match source'
-        default: '0.6.38'
+        default: '0.6.39'
         required: true
       publish:
         description: 'After all checks, upload to a release draft (main only)'
@@ -104,9 +104,32 @@ jobs:
           name: openwrt-core-${{ matrix.cpu }}
           path: .build/optional-core/
 
+  extra-core:
+    if: github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        cpu: [x86_64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.0'
+          cache: false
+      - name: Build checksum-pinned optional Naive, WireGuard and private Tor bundle
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends lld-20 zstd
+          python3 openwrt/extra.py --cpu '${{ matrix.cpu }}' --work /tmp/nailink-extra-build --sdk-work /tmp/nailink-sdk --output .build/extra-core --verify-pins
+      - uses: actions/upload-artifact@v7
+        with:
+          name: openwrt-core-extra-${{ matrix.cpu }}
+          path: .build/extra-core/
+
   runtime:
     if: github.event_name == 'workflow_dispatch'
-    needs: [web, optional-core]
+    needs: [web, optional-core, extra-core]
     runs-on: ubuntu-24.04
     strategy:
       matrix:
@@ -177,22 +200,30 @@ jobs:
         with:
           name: openwrt-core-x86_64
           path: .build/optional-core/
+      - uses: actions/download-artifact@v8
+        if: matrix.cpu == 'x86_64'
+        with:
+          name: openwrt-core-extra-x86_64
+          path: .build/extra-core/
       - name: Real dae and sing-box switching, failure and dual-stack datapath
         if: matrix.cpu == 'x86_64'
         run: |
           sudo apt-get install -y --no-install-recommends nftables iproute2 ethtool tcpdump
+          mkdir -p /tmp/nailink-extra-native
+          tar -xzf .build/extra-core/nailink-sing-box-extra-1.14.3-nailink.2-x86_64.tar.gz -C /tmp/nailink-extra-native
+          chmod 700 /tmp/nailink-extra-native
           mkdir -p /tmp/nailink-core-static
           cp .build/optional-core/nailink-sing-box-1.14.3-nailink.1-x86_64.tar.gz /tmp/nailink-core-static/core.ipk
           echo '084a4e845cc1c470dfb3dbdbb41dfbf5723decaff707d22c9486455fe6eba77f  /tmp/nailink-core-static/core.ipk' | sha256sum -c -
           tar -xzf /tmp/nailink-core-static/core.ipk -C /tmp/nailink-core-static
           tar -xzf /tmp/nailink-core-static/data.tar.gz -C /tmp/nailink-core-static
           (cd wing && DAED_TEST_SINGBOX=/tmp/nailink-core-static/usr/bin/sing-box go test -count=1 ./routercore ./dae)
-          sudo env "PATH=$PATH" "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" python3 tests/openwrt/protocol_interop.py --wing wing --sing-box /tmp/nailink-protocol-servers/sing-box-1.14.3-linux-amd64/sing-box --juicity-server /tmp/nailink-protocol-servers/juicity/juicity-server --client-singbox /tmp/nailink-core-static/usr/bin/sing-box
+          sudo env "PATH=$PATH" "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" python3 tests/openwrt/protocol_interop.py --wing wing --sing-box /tmp/nailink-protocol-servers/sing-box-1.14.3-linux-amd64/sing-box --juicity-server /tmp/nailink-protocol-servers/juicity/juicity-server --client-singbox /tmp/nailink-core-static/usr/bin/sing-box --client-extra /tmp/nailink-extra-native
           sudo env "PATH=$PATH" python3 tests/openwrt/core_netns.py --runtime "$PWD/.build/runtime/daed" --probe "$PWD/.build/runtime/btf-probe" --singbox /tmp/nailink-core-static/usr/bin/sing-box --nft-root / --workspace /tmp/nailink-core-netns --fw4 --ipv6
       - name: LuCI gateway authentication and upgrade tests
         if: matrix.cpu == 'x86_64'
         run: |
-          (cd wing && DAED_TEST_SINGBOX_ARCHIVE=/tmp/nailink-core-static/core.ipk go test ../openwrt/luci-proxy.go ../openwrt/luci-proxy_test.go ../openwrt/maintenance.go ../openwrt/maintenance-geodata.go ../openwrt/maintenance-core.go ../openwrt/maintenance_test.go ../openwrt/maintenance-core_test.go)
+          (cd wing && DAED_TEST_EXTRA_ARCHIVE="$GITHUB_WORKSPACE/.build/extra-core/nailink-sing-box-extra-1.14.3-nailink.2-x86_64.tar.gz" DAED_TEST_SINGBOX_ARCHIVE=/tmp/nailink-core-static/core.ipk go test ../openwrt/luci-proxy.go ../openwrt/luci-proxy_test.go ../openwrt/maintenance.go ../openwrt/maintenance-geodata.go ../openwrt/maintenance-core.go ../openwrt/maintenance_test.go ../openwrt/maintenance-core_test.go)
           curl -fL --proto '=https' -o /tmp/luci-rootfs-25.tar.gz https://downloads.openwrt.org/releases/25.12.4/targets/x86/64/openwrt-25.12.4-x86-64-rootfs.tar.gz
           echo '0b80f307a5383a0c2c08712c500a4351f7b7cad0a6c2963e02a74db4e6831bf4  /tmp/luci-rootfs-25.tar.gz' | sha256sum -c -
           mkdir /tmp/luci-rootfs-25

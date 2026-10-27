@@ -58,7 +58,8 @@ export function NodeProtocolGuide({ opened }: { opened: boolean }) {
       )}
       {query.data?.current === 'sing-box' && (
         <p className="mt-2 text-muted-foreground">
-          支持普通链接，也可粘贴 sing-box 单个出站 JSON 或含 outbounds 的出站组合。原生 JSON 节点仅供 sing-box 使用。
+          支持普通链接、sing-box 单个出站或 endpoint JSON，以及封闭的 outbounds / endpoints 组合。Naive、WireGuard、Tor
+          需先在代理内核窗口安装扩展协议包。原生 JSON 节点仅供 sing-box 使用。
         </p>
       )}
       {!!current?.protocols.some((p) => !p.available) && (

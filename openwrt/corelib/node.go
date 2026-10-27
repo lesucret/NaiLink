@@ -30,6 +30,9 @@ func decode64(s string) ([]byte, error) {
 	return nil, errors.New("invalid_node")
 }
 func Node(link, tag string, opt NodeOptions) (Object, error) {
+	if strings.HasPrefix(strings.TrimSpace(link), "naive+https://") {
+		return naiveNode(link, tag)
+	}
 	if IsNativeURI(link) && !strings.HasPrefix(strings.TrimSpace(link), "singbox://") {
 		encoded, err := EncodeNativeURI(link)
 		if err != nil {
@@ -47,7 +50,7 @@ func Node(link, tag string, opt NodeOptions) (Object, error) {
 			all = append(all, children...)
 		}
 		for _, n := range all {
-			if tls, ok := n["tls"].(map[string]any); ok {
+			if tls, ok := n["tls"].(map[string]any); ok && n["type"] != "naive" {
 				if _, explicit := tls["insecure"]; !explicit && opt.AllowInsecure {
 					tls["insecure"] = true
 				}

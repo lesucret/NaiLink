@@ -152,7 +152,7 @@ func (m *routerCoreManager) plan(ctx context.Context, target string) routercore.
 	result.Nodes = len(conf.Node)
 	result.Groups = len(conf.Group)
 	result.Installed = target == "dae" || routerSingBoxInstalled()
-	result.Revision = routercore.Fingerprint([]any{current, target, conf, routerCurrentGeodataIdentity(m.dirs), result.Installed, routercore.SingBoxVersion, routercore.AdapterRevision})
+	result.Revision = routercore.Fingerprint([]any{current, target, conf, routerCurrentGeodataIdentity(m.dirs), result.Installed, routercore.SingBoxVersion, routercore.AdapterRevision, routerExtraIdentity()})
 	var profile sbObject
 	if target == "dae" {
 		result.Problems = append(result.Problems, routerDaeNodeProblems(conf)...)
@@ -248,6 +248,8 @@ func (m *routerCoreManager) save(state routercore.State, phase string) error {
 	return nil
 }
 func (m *routerCoreManager) start(ctx context.Context, name string, conf *daeConfig.Config) (routerCoreSession, error) {
+	ctx, cancel := context.WithTimeout(ctx, routerCoreStartTimeout(conf))
+	defer cancel()
 	session, err := m.factory(ctx, name, conf)
 	if err != nil {
 		return nil, err
@@ -338,7 +340,7 @@ func (m *routerCoreManager) switchPrepared(ctx context.Context, target string, o
 		_ = m.save(pending, "failed")
 		return err
 	}
-	rollbackCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	rollbackCtx, cancel := context.WithTimeout(context.Background(), routerCoreStartTimeout(conf))
 	defer cancel()
 	restored, restoreErr := m.start(rollbackCtx, oldState.Current, conf)
 	pending.Current = oldState.Current
@@ -361,14 +363,14 @@ func (m *routerCoreManager) switchPrepared(ctx context.Context, target string, o
 	return errors.New("core_rolled_back")
 }
 func (m *routerCoreManager) startInitial(state routercore.State, conf *daeConfig.Config) (routerCoreSession, routercore.State, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), routerCoreStartTimeout(conf))
 	initial, err := m.start(ctx, state.Current, conf)
 	cancel()
 	// An optional-core version migration must also recover when the previous
 	// journal entry records a same-core restart. The canonical config is still
 	// dae's; never leave an otherwise working installation in a respawn loop.
 	if err != nil && state.Current == "sing-box" && (state.Previous == "dae" || err.Error() == "singbox_version_mismatch") && err.Error() != "core_cleanup_failed" {
-		ctx, cancel = context.WithTimeout(context.Background(), 45*time.Second)
+		ctx, cancel = context.WithTimeout(context.Background(), routerCoreStartTimeout(conf))
 		initial, err = m.start(ctx, "dae", conf)
 		cancel()
 		if err == nil {
@@ -472,7 +474,7 @@ func Run(log *logrus.Logger, conf *daeConfig.Config, dirs []string, disableTimes
 				return err
 			}
 			if message.Core != nil {
-				ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), 260*time.Second)
 				err = m.switchTo(ctx, message.Core.Target, message.Core.Revision, message.Core.Operation)
 				cancel()
 				message.Callback <- err
@@ -537,7 +539,7 @@ func (m *routerCoreManager) recoverExited() error {
 	if err = m.save(state, "recovering"); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), routerCoreStartTimeout(conf))
 	defer cancel()
 	session, err := m.start(ctx, state.Current, conf)
 	if err != nil {
@@ -649,4 +651,12 @@ func (s *routerDaeSession) Stop(ctx context.Context) error {
 	case <-ctx.Done():
 		return errors.New("core_stop_failed")
 	}
+}
+
+func routerExtraIdentity() string {
+	directory, err := routercore.ExtraDirectory(routerExtraRoot)
+	if err != nil {
+		return "missing"
+	}
+	return directory
 }

@@ -10,7 +10,7 @@ import (
 )
 
 func IsNativeURI(link string) bool {
-	for _, p := range []string{"singbox://", "hysteria://", "ssh://", "snell://"} {
+	for _, p := range []string{"singbox://", "hysteria://", "ssh://", "snell://", "tor://", "wireguard://"} {
 		if strings.HasPrefix(strings.TrimSpace(link), p) {
 			return true
 		}
@@ -18,9 +18,15 @@ func IsNativeURI(link string) bool {
 	return false
 }
 func EncodeNativeURI(link string) (string, error) {
+	if strings.HasPrefix(strings.TrimSpace(link), "tor://") {
+		return torURI(link)
+	}
 	u, err := url.Parse(strings.TrimSpace(link))
 	if err != nil || u.Hostname() == "" {
 		return "", errors.New("invalid_node")
+	}
+	if u.Scheme == "wireguard" {
+		return wireguardURI(u)
 	}
 	if u.Path != "" && u.Path != "/" {
 		return "", errors.New("unsupported_node_path")

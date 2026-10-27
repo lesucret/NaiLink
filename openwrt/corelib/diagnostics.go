@@ -53,6 +53,19 @@ func ProblemText(code string) string {
 }
 
 var problemMessages = map[string]string{
+	"invalid_naive_concurrency":  "Naive 并发连接参数必须为 0 至 4，避免过多连接占用资源",
+	"unsupported_naive_insecure": "Naive / Cronet 不支持跳过证书验证，请配置正确证书或内联 CA",
+
+	"extra_not_installed":          "该节点需要安装 sing-box 扩展协议包，请在代理内核窗口安装后重试",
+	"too_many_tor_nodes":           "每个运行配置最多启用一个 Tor 节点，避免多进程占用过多资源",
+	"unsupported_tor_option":       "Tor 仅允许出口国家和排除节点选项，不接受程序路径、命令或自定义文件",
+	"unsupported_wireguard_system": "WireGuard 使用用户态 endpoint，不允许创建系统网卡或监听端口",
+	"invalid_wireguard_key":        "WireGuard 密钥必须为有效的 32 字节 Base64 值",
+	"invalid_wireguard_address":    "WireGuard 必须填写有效的本地 IP 前缀",
+	"invalid_wireguard_peer":       "WireGuard 对端地址、端口、公钥或允许网段无效",
+	"invalid_wireguard_workers":    "WireGuard 工作线程必须为 1 至 4，默认使用 1 个",
+	"invalid_wireguard_mtu":        "WireGuard MTU 必须为 576 至 9000",
+
 	"invalid_native_node":                 "sing-box 原生节点 JSON 格式或服务器参数不正确",
 	"unsupported_native_section":          "这里只接受单个出站或 outbounds 出站组合，不接受完整系统配置",
 	"unsupported_native_field":            "原生节点包含当前面板不允许的文件、程序或系统设置字段",

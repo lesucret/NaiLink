@@ -35,6 +35,14 @@ type RouterCoreProbe struct {
 // active core is sing-box. This process has no TUN, routes or user data writes.
 func ProbeRouterCoreUDP(ctx context.Context, link string, global daeConfig.Global) (RouterCoreProbe, error) {
 	result := RouterCoreProbe{Tested: time.Now()}
+	if node, err := routercore.Node(link, "udp-check", routercore.NodeOptions{}); err == nil {
+		for _, out := range routercore.ExpandNode(node) {
+			if routercore.NativeFeature(out) == "tor" {
+				result.Message = "udp_unsupported"
+				return result, nil
+			}
+		}
+	}
 	select {
 	case routerCoreProbeSlots <- struct{}{}:
 		defer func() { <-routerCoreProbeSlots }()
@@ -186,6 +194,8 @@ func routerSOCKSUDPQuery(ctx context.Context, session *routerSingBoxSession, tar
 	return nil
 }
 
+var routerTorProbeSlot = make(chan struct{}, 1)
+
 var routerCoreProbeSlots = make(chan struct{}, 2)
 
 func routerProbeConfiguration(links []string, global daeConfig.Global) (*daeConfig.Config, map[int]string, []RouterCoreProbe, error) {
@@ -265,7 +275,95 @@ func ProbeRouterCoreNodesProgress(ctx context.Context, links []string, global da
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	return probeRouterCoreNodesProgress(ctx, links, global, report)
+	results := make([]RouterCoreProbe, len(links))
+	var ordinary, extra []string
+	var indices, extraIndices, torIndices []int
+	for i, link := range links {
+		node, err := routercore.Node(link, "classify", routercore.NodeOptions{})
+		needs, tor := false, false
+		if err == nil {
+			for _, entry := range routercore.ExpandNode(node) {
+				kind := routercore.NativeFeature(entry)
+				needs = needs || kind != ""
+				tor = tor || kind == "tor"
+			}
+		}
+		if needs {
+			if _, err := routercore.ExtraDirectory(routerExtraRoot); err != nil {
+				results[i] = RouterCoreProbe{Tested: time.Now(), Message: "extra_not_installed"}
+				if report != nil {
+					report(i, results[i])
+				}
+				continue
+			}
+		}
+		if tor {
+			torIndices = append(torIndices, i)
+		} else if needs {
+			extra = append(extra, link)
+			extraIndices = append(extraIndices, i)
+		} else {
+			ordinary = append(ordinary, link)
+			indices = append(indices, i)
+		}
+	}
+
+	run := func(batch []string, ids []int) error {
+		if len(batch) == 0 {
+			return nil
+		}
+		values, err := probeRouterCoreNodesProgress(ctx, batch, global, func(i int, r RouterCoreProbe) {
+			results[ids[i]] = r
+			if report != nil {
+				report(ids[i], r)
+			}
+		})
+		for i, r := range values {
+			results[ids[i]] = r
+		}
+		return err
+	}
+	if err := run(ordinary, indices); err != nil {
+		return results, err
+	}
+	// Cronet engines and userspace WG devices are eager native resources. Bound
+	// their batch size as well as HTTP concurrency; leave ordinary bulk probes
+	// on the original single-process path.
+	for start := 0; start < len(extra); start += 8 {
+		end := min(start+8, len(extra))
+		if err := run(extra[start:end], extraIndices[start:end]); err != nil {
+			return results, err
+		}
+	}
+	for _, index := range torIndices {
+		select {
+		case routerTorProbeSlot <- struct{}{}:
+		case <-ctx.Done():
+			return results, ctx.Err()
+		}
+		torCtx, cancel := context.WithTimeout(ctx, 180*time.Second)
+		values, err := probeRouterCoreNodesProgress(torCtx, []string{links[index]}, global, func(_ int, r RouterCoreProbe) {
+			results[index] = r
+			if report != nil {
+				report(index, r)
+			}
+		})
+		cancel()
+		<-routerTorProbeSlot
+		if len(values) > 0 {
+			results[index] = values[0]
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return results, ctx.Err()
+			}
+			results[index] = RouterCoreProbe{Tested: time.Now(), Message: "tor_bootstrap_failed"}
+			if report != nil {
+				report(index, results[index])
+			}
+		}
+	}
+	return results, nil
 }
 
 func probeRouterCoreNodesProgress(ctx context.Context, links []string, global daeConfig.Global, report func(int, RouterCoreProbe)) ([]RouterCoreProbe, error) {
@@ -333,7 +431,11 @@ func probeRouterCoreNodesProgress(ctx context.Context, links []string, global da
 				if err != nil {
 					results[index] = RouterCoreProbe{Tested: time.Now(), Message: "test_failed"}
 				} else {
-					results[index] = routerProbeHTTP(ctx, dialer.(proxy.ContextDialer), global)
+					if session.hasTor {
+						results[index] = routerProbeHTTPTimeout(ctx, dialer.(proxy.ContextDialer), global, 30*time.Second)
+					} else {
+						results[index] = routerProbeHTTP(ctx, dialer.(proxy.ContextDialer), global)
+					}
 				}
 				if !results[index].Alive {
 					results[index].Message = diagnostics.message(name, results[index].Message)
@@ -377,6 +479,9 @@ func probeRouterCoreNodesProgress(ctx context.Context, links []string, global da
 // fresh connections, preserve Host/TLS SNI, and include the entire request's
 // connection/handshake time. Starting the private core is outside this timer.
 func routerProbeHTTP(ctx context.Context, dialer proxy.ContextDialer, global daeConfig.Global) RouterCoreProbe {
+	return routerProbeHTTPTimeout(ctx, dialer, global, 3*time.Second)
+}
+func routerProbeHTTPTimeout(ctx context.Context, dialer proxy.ContextDialer, global daeConfig.Global, timeout time.Duration) RouterCoreProbe {
 	result := RouterCoreProbe{Tested: time.Now(), Message: "check_target_failed"}
 	if len(global.TcpCheckUrl) == 0 {
 		return result
@@ -400,7 +505,7 @@ func routerProbeHTTP(ctx context.Context, dialer proxy.ContextDialer, global dae
 	if len(addresses) == 0 {
 		addresses = []string{target.Hostname()}
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	started := time.Now()
 	completed := make(chan RouterCoreProbe, len(addresses))
