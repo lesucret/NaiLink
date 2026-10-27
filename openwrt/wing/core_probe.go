@@ -398,7 +398,10 @@ func probeRouterCoreNodesProgress(ctx context.Context, links []string, global da
 	if len(global.TcpCheckUrl) == 0 {
 		return nil, errors.New("missing_check_url")
 	}
-	diagnostics := &routerProbeErrors{codes: map[string]string{}}
+	diagnostics := &routerProbeErrors{codes: map[string]string{}, aliases: map[string]string{}}
+	for _, name := range names {
+		diagnostics.aliases[routercore.MihomoName("node:"+name)] = name
+	}
 	session, err := routerStartProbe(ctx, conf, diagnostics)
 	if err != nil {
 		// Native validation can reject an option not checked by the adapter.
@@ -493,7 +496,7 @@ func probeRouterCoreNodesProgress(ctx context.Context, links []string, global da
 // fresh connections, preserve Host/TLS SNI, and include the entire request's
 // connection/handshake time. Starting the private core is outside this timer.
 func routerProbeHTTP(ctx context.Context, dialer proxy.ContextDialer, global daeConfig.Global) RouterCoreProbe {
-	return routerProbeHTTPTimeout(ctx, dialer, global, 3*time.Second)
+	return routerProbeHTTPTimeout(ctx, dialer, global, routercore.ManualProbeTimeout)
 }
 func routerProbeHTTPTimeout(ctx context.Context, dialer proxy.ContextDialer, global daeConfig.Global, timeout time.Duration) RouterCoreProbe {
 	result := RouterCoreProbe{Tested: time.Now(), Message: "check_target_failed"}
@@ -571,18 +574,26 @@ func routerProbeHTTPTimeout(ctx context.Context, dialer proxy.ContextDialer, glo
 }
 
 type routerProbeErrors struct {
-	mu    sync.Mutex
-	codes map[string]string
+	mu      sync.Mutex
+	codes   map[string]string
+	aliases map[string]string
 }
 
 var routerProbeLogNode = regexp.MustCompile(`\[node:(probe-[0-9]+)\]`)
+var routerMihomoProbeLogNode = regexp.MustCompile(`\[TCP\]\s+dial\s+(nk-[a-f0-9]{24})(?:\s|\()`)
 
 func (*routerProbeErrors) Levels() []logrus.Level {
 	return []logrus.Level{logrus.ErrorLevel, logrus.WarnLevel}
 }
 func (p *routerProbeErrors) Fire(entry *logrus.Entry) error {
 	node := routerProbeLogNode.FindStringSubmatch(entry.Message)
-	if len(node) != 2 {
+	name := ""
+	if len(node) == 2 {
+		name = node[1]
+	} else if alias := routerMihomoProbeLogNode.FindStringSubmatch(entry.Message); len(alias) == 2 {
+		name = p.aliases[alias[1]]
+	}
+	if name == "" {
 		return nil
 	}
 	text := strings.ToLower(entry.Message)
@@ -598,6 +609,8 @@ func (p *routerProbeErrors) Fire(entry *logrus.Entry) error {
 		code = "dns_failed"
 	case strings.Contains(text, "connection refused"):
 		code = "connection_refused"
+	case routercore.ProbeProtocolFailure(text) != "":
+		code = routercore.ProbeProtocolFailure(text)
 	case strings.Contains(text, "timeout"), strings.Contains(text, "deadline exceeded"):
 		code = "timeout"
 	case strings.Contains(text, "connection reset"), strings.Contains(text, "unexpected eof"):
@@ -605,12 +618,30 @@ func (p *routerProbeErrors) Fire(entry *logrus.Entry) error {
 	}
 	if code != "" {
 		p.mu.Lock()
-		if p.codes[node[1]] == "" || p.codes[node[1]] == "timeout" {
-			p.codes[node[1]] = code
+		if p.codes[name] == "" || routerProbeErrorPriority(code) > routerProbeErrorPriority(p.codes[name]) {
+			p.codes[name] = code
 		}
 		p.mu.Unlock()
 	}
 	return nil
+}
+
+func routerProbeErrorPriority(code string) int {
+	switch code {
+	case "authentication_failed", "tls_failed", "invalid_ech":
+		return 6
+	case "gateway_failed", "websocket_failed":
+		return 5
+	case "tls_handshake_timeout", "dns_failed":
+		return 4
+	case "node_tcp_timeout", "connection_refused":
+		return 3
+	case "connection_closed":
+		return 2
+	case "timeout":
+		return 1
+	}
+	return 0
 }
 func (p *routerProbeErrors) message(name, fallback string) string {
 	p.mu.Lock()

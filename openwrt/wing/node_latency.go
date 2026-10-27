@@ -192,7 +192,7 @@ func latencyProbeNodes(ctx context.Context, ids *[]graphql.ID) ([]db.Node, error
 }
 
 func testSingleNodeLatency(ctx context.Context, option *dialer.GlobalOption, node *db.Node) *LatencyResolver {
-	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, routercore.ManualProbeTimeout+time.Second)
 	defer cancel()
 	r := &LatencyResolver{NodeID: node.ID, TestedAtV: time.Now(), NodeFingerprintV: latencyNodeFingerprint(node)}
 	if routercore.IsNativeURI(node.Link) {
@@ -237,7 +237,7 @@ func probeInteractiveLatency(parent context.Context, d *dialer.Dialer) (*dialer.
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
+	ctx, cancel := context.WithTimeout(parent, routercore.ManualProbeTimeout)
 	defer cancel()
 	type attempt struct {
 		ok      bool
@@ -308,6 +308,9 @@ func latencyFailureCode(err error) string {
 		return "connection_closed"
 	}
 	message := strings.ToLower(err.Error())
+	if code := routercore.ProbeProtocolFailure(message); code != "" {
+		return code
+	}
 	var network net.Error
 	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &network) && network.Timeout()) || strings.Contains(message, "timeout") {
 		return "timeout"

@@ -4,6 +4,7 @@ package dae
 import (
 	"context"
 	"errors"
+	"github.com/daeuniverse/dae-wing/routercore"
 	"github.com/sirupsen/logrus"
 	"io"
 	"net"
@@ -22,6 +23,42 @@ type routerProbeDialFunc func(context.Context, string, string) (net.Conn, error)
 
 func (f routerProbeDialFunc) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	return f(ctx, network, address)
+}
+
+func TestRouterCoreSlowHTTPResponseIsMeasuredRatherThanRejected(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(3200 * time.Millisecond):
+			w.WriteHeader(204)
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	dial := routerProbeDialFunc(func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+	})
+	result := routerProbeHTTP(context.Background(), dial, daeConfig.Global{TcpCheckUrl: []string{"http://slow.test/generate_204", "127.0.0.1"}, TcpCheckHttpMethod: http.MethodHead})
+	if !result.Alive || result.Latency < 3200 {
+		t.Fatal("slow valid response rejected or measured incorrectly", result)
+	}
+}
+
+func TestRouterMihomoProbeErrorsUseOnlyKnownPrivateAliases(t *testing.T) {
+	alias := routercore.MihomoName("node:probe-0")
+	p := &routerProbeErrors{codes: map[string]string{}, aliases: map[string]string{alias: "probe-0"}}
+	_ = p.Fire(&logrus.Entry{Message: "[TCP] dial " + alias + " (match InUser/probe-0) private.example:443 error: dial tcp secret:443: i/o timeout"})
+	if p.message("probe-0", "unreachable") != "node_tcp_timeout" {
+		t.Fatal("Mihomo error was not attached to its node")
+	}
+	_ = p.Fire(&logrus.Entry{Message: "[TCP] dial " + alias + " (match InUser/probe-0) websocket: bad handshake: HTTP 504 private-token"})
+	if p.message("probe-0", "unreachable") != "gateway_failed" {
+		t.Fatal("less informative family failure hid the gateway response")
+	}
+	unknown := routercore.MihomoName("node:outside")
+	_ = p.Fire(&logrus.Entry{Message: "[TCP] dial " + unknown + " (match Match/) certificate error"})
+	if len(p.codes) != 1 || strings.Contains(p.message("probe-0", "unreachable"), "private") {
+		t.Fatal("unrelated error accepted or private text leaked")
+	}
 }
 
 func TestRouterCoreHTTPRacesFixedTargetsAndHonorsMethod(t *testing.T) {
@@ -143,7 +180,7 @@ func TestRouterCoreProbeFailureDoesNotHideTimeoutOrLeakValues(t *testing.T) {
 func TestRouterCoreProbeNativeErrorsAreScopedAndRedacted(t *testing.T) {
 	p := &routerProbeErrors{codes: map[string]string{}}
 	cases := []struct{ message, code string }{
-		{"dial tcp private.example:443: i/o timeout", "timeout"},
+		{"dial tcp private.example:443: i/o timeout", "node_tcp_timeout"},
 		{"tls: failed to verify certificate: private-value", "tls_failed"},
 		{"REALITY verification failed private-value", "authentication_failed"},
 		{"lookup private.example: no such host", "dns_failed"},

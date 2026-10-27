@@ -1,9 +1,16 @@
 # NaiLink · 奶油互联
 
 支持 OpenWrt、ImmortalWrt、iStoreOS 的现代 LuCI，提供 x86_64 / ARM64 及试验性 ARMv7 / MIPS32 / MIPSel32 的
-IPK 和 APK v3 安装包。当前测试版：[openwrt-v0.6.42](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.42)。
+IPK 和 APK v3 安装包。当前测试版：[openwrt-v0.6.43](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.43)。
 
 本项目从 0.6.14 起更名为 NaiLink（奶油互联），侧边栏显示 **NaiLink**。0.6.13 及更早版本显示 **Daed**。沿用原有包名、服务、路径和配置，可继续保留数据升级。
+
+## 0.6.43 手动测试与故障分类
+
+- dae、sing-box、mihomo 手动 HTTP 测试统一最多 8 秒，包含新建连接和协议握手的真实耗时；多数节点提前返回，仍最多 8 个请求并行，停止即取消。
+- 不改变后台自动健康检查、自动选路策略、节点认证、测试目标或用户 DNS / 分流设置。
+- 修复 mihomo 私有节点哈希名未关联诊断的问题；只接纳本批已知别名，区分节点 TCP 连接超时、TLS 握手超时、WebSocket 握手失败和入口网关错误，不输出原始日志或凭据。
+- 超时本身不能区分本地线路、服务端防火墙与服务端停机；网关 502/503/504 也不是密码错误。原参数经独立内核同样失败时，不自动改写节点或关闭证书验证。
 
 ## 0.6.42 Clash 订阅与更新保护
 

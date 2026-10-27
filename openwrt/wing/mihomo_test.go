@@ -318,6 +318,9 @@ func TestRouterMihomoProtocolInteroperability(t *testing.T) {
 				if results[i].Alive {
 					t.Fatal("accepted invalid certificate")
 				}
+				if strings.Contains(c.Name, "certificate-rejected") && results[i].Message != "tls_failed" {
+					t.Fatal("Mihomo certificate diagnostic was lost", results[i].Message)
+				}
 				return
 			}
 			if !results[i].Alive {

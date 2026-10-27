@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"github.com/daeuniverse/dae-wing/db"
+	"github.com/daeuniverse/dae-wing/routercore"
 	dialer "github.com/daeuniverse/dae/component/outbound/dialer"
 	"github.com/graph-gophers/graphql-go"
 	"github.com/sirupsen/logrus"
@@ -146,7 +147,7 @@ func TestRouterLatencyThroughRealSocksAndCancellation(t *testing.T) {
 			}
 			go func() {
 				defer c.Close()
-				_ = c.SetDeadline(time.Now().Add(3 * time.Second))
+				_ = c.SetDeadline(time.Now().Add(routercore.ManualProbeTimeout + 2*time.Second))
 				greeting := make([]byte, 2)
 				if _, err := io.ReadFull(c, greeting); err != nil {
 					return
@@ -182,6 +183,9 @@ func TestRouterLatencyThroughRealSocksAndCancellation(t *testing.T) {
 				if request.URL.Path == "/slow" {
 					time.Sleep(500 * time.Millisecond)
 				}
+				if request.URL.Path == "/delayed" {
+					time.Sleep(3200 * time.Millisecond)
+				}
 				if request.URL.Path == "/stall" {
 					_, _ = io.Copy(io.Discard, c)
 					return
@@ -209,6 +213,12 @@ func TestRouterLatencyThroughRealSocksAndCancellation(t *testing.T) {
 	}
 	t.Logf("IPv4 HTTP response returned in %v despite stalled IPv6", time.Since(startDual))
 	option.TcpCheckOptionRaw.Reset()
+	option.TcpCheckOptionRaw.Raw = []string{"http://127.0.0.1/delayed", "127.0.0.1"}
+	result = testSingleNodeLatency(context.Background(), option, &n)
+	if !result.AliveVal || result.LatencyMsV == nil || *result.LatencyMsV < 3200 {
+		t.Fatal("usable slow response was rejected or its actual duration was hidden", result)
+	}
+	option.TcpCheckOptionRaw.Reset()
 	option.TcpCheckOptionRaw.Raw = []string{"http://127.0.0.1/generate_204", "127.0.0.1"}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -230,7 +240,7 @@ func TestRouterLatencyThroughRealSocksAndCancellation(t *testing.T) {
 	option.TcpCheckOptionRaw.Raw = []string{"http://127.0.0.1/stall", "127.0.0.1"}
 	start = time.Now()
 	result = testSingleNodeLatency(context.Background(), option, &n)
-	if result.AliveVal || time.Since(start) > 3500*time.Millisecond {
+	if result.AliveVal || time.Since(start) > routercore.ManualProbeTimeout+500*time.Millisecond {
 		t.Fatal("stalled HTTP probe exceeded interactive deadline")
 	}
 	t.Logf("Stalled HTTP request stopped after %v", time.Since(start))

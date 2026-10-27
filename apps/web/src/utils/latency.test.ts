@@ -49,6 +49,16 @@ describe('latency colors', () => {
     expect(formatLatencyLabel({ ...measured(0), alive: false, message: 'tls_failed' }, translate)).toBe(
       'latency.nodeFailure.tls',
     )
+    for (const [message, key] of [
+      ['node_tcp_timeout', 'nodeConnect'],
+      ['tls_handshake_timeout', 'tlsHandshake'],
+      ['websocket_failed', 'websocket'],
+      ['gateway_failed', 'gateway'],
+    ]) {
+      expect(formatLatencyLabel({ ...measured(0), alive: false, message }, translate)).toBe(
+        `latency.nodeFailure.${key}`,
+      )
+    }
     expect(formatLatencyLabel({ ...measured(0), alive: false, message: 'private://password@host' }, translate)).toBe(
       'latency.failed',
     )
