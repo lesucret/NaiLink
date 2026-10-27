@@ -55,7 +55,7 @@ uclient-fetch -O /tmp/nailink-install.sh https://github.com/slobys/NaiLink/relea
 
 **0.6.42 修复 Clash 订阅**：支持内嵌 `proxies` 的 YAML / JSON、SIP008 和普通 / Base64 节点列表；更新失败保留原节点，内容未变时保留节点 ID。仅提取节点，不导入订阅中的 DNS、路由或监听设置。[格式与限制 →](https://slobys.github.io/NaiLink/nodes.html#clash)
 
-**0.6.43 优化节点测试**：三内核手动 HTTP 测试统一最多 8 秒，减少慢节点误判；增加连接、TLS / WebSocket 握手和入口网关错误提示。自动选路及现有配置保持。[超时排查说明 →](https://slobys.github.io/NaiLink/troubleshooting.html#node-timeout)
+**0.6.43 优化节点测试**：三内核普通节点手动 HTTP 测试统一最多 8 秒，减少慢节点误判；增加连接、TLS / WebSocket 握手和入口网关错误提示。自动选路及现有配置保持。[超时排查说明 →](https://slobys.github.io/NaiLink/troubleshooting.html#node-timeout)
 
 ## 开始使用
 

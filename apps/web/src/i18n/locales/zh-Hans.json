@@ -286,7 +286,7 @@
     "automaticShort": "自动",
     "measurementDetails": "测试耗时说明",
     "measurementHint": "手动测试包含新建连接耗时，并非 Ping；后台自动检测可能复用连接。",
-    "manualDescription": "手动 HTTP 测试：包含新建连接和协议握手，单次最多 8 秒；排队和内核启动不计入延迟。请使用相同目标比较内核。",
+    "manualDescription": "手动 HTTP 测试：包含新建连接和协议握手；普通节点单次最多 8 秒，Tor 等长引导协议沿用原期限。排队和内核启动不计入延迟，请使用相同目标比较内核。",
     "automaticDescription": "后台自动检测：可能复用连接，不能与手动新建连接测试直接比较。",
     "unknownDescription": "服务端未标明测试方式。比较内核前请手动测试同一个节点和目标。",
     "test": "测试",

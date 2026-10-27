@@ -286,7 +286,7 @@
     "automaticShort": "Auto",
     "measurementDetails": "About test duration",
     "measurementHint": "Manual tests include a fresh connection, not ICMP ping. Automatic health checks may reuse connections.",
-    "manualDescription": "Manual HTTP test: includes a fresh connection and protocol handshake, with up to 8 seconds per request. Queueing and core startup are excluded. Compare cores using the same target.",
+    "manualDescription": "Manual HTTP test: includes a fresh connection and protocol handshake. Ordinary nodes allow up to 8 seconds; long-bootstrap protocols such as Tor retain their own limits. Queueing and core startup are excluded. Compare cores using the same target.",
     "automaticDescription": "Automatic health check: may reuse connections and is not directly comparable to a manual fresh-connection test.",
     "unknownDescription": "The server did not identify the measurement type. Manually test the same node and target before comparing cores.",
     "test": "Test",
