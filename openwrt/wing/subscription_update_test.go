@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +19,74 @@ import (
 	"github.com/graph-gophers/graphql-go"
 	"gorm.io/gorm"
 )
+
+func TestRouterSubscriptionStableIDsAndFailedRefreshPreserveData(t *testing.T) {
+	payload := fixtureNode + "\n" + strings.Replace(fixtureNode, "#Fixture", "#Second", 1) + "\nssh://fixture:fixture@192.0.2.20:22#SSH"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, payload) }))
+	defer srv.Close()
+	sub := updateFixture(t, srv.URL)
+	d := db.DB(context.Background())
+	if _, err := UpdateById(context.Background(), sub.ID); err != nil {
+		t.Fatal(err)
+	}
+	var before, after []db.Node
+	d.Order("id").Find(&before)
+	if len(before) != 3 {
+		t.Fatal("fixture not imported")
+	}
+	if _, err := UpdateById(context.Background(), sub.ID); err != nil {
+		t.Fatal(err)
+	}
+	d.Order("id").Find(&after)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("unchanged refresh rebuilt nodes")
+	}
+	for _, bad := range []string{"<html>expired-token</html>", fixtureNode + "\nnot-a-node", "proxies:\n- {name: bad, type: unknown, server: private-token, port: 443}"} {
+		payload = bad
+		if _, err := UpdateById(context.Background(), sub.ID); err == nil {
+			t.Fatal("bad payload accepted")
+		}
+		after = nil
+		d.Order("id").Find(&after)
+		if !reflect.DeepEqual(before, after) {
+			t.Fatal("failed refresh changed existing data")
+		}
+	}
+}
+
+func TestRouterSubscriptionPartialInsertFailureRollsBackRemovalAndInserts(t *testing.T) {
+	payload := fixtureNode
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, payload) }))
+	defer srv.Close()
+	sub := updateFixture(t, srv.URL)
+	d := db.DB(context.Background())
+	if _, err := UpdateById(context.Background(), sub.ID); err != nil {
+		t.Fatal(err)
+	}
+	var before, after []db.Node
+	d.Find(&before)
+	payload = strings.Replace(fixtureNode, "#Fixture", "#New1", 1) + "\n" + strings.Replace(fixtureNode, "#Fixture", "#New2", 1)
+	count := 0
+	const callback = "router:partial_insert_failure"
+	if err := d.Callback().Create().Before("gorm:create").Register(callback, func(query *gorm.DB) {
+		if query.Statement.Table == "nodes" {
+			count++
+			if count == 2 {
+				query.AddError(errors.New("injected database failure"))
+			}
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer d.Callback().Create().Remove(callback)
+	if _, err := UpdateById(context.Background(), sub.ID); err == nil {
+		t.Fatal("partial save reported success")
+	}
+	d.Find(&after)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("failed save deleted or partially replaced old nodes")
+	}
+}
 
 func updateFixture(t *testing.T, link string) db.Subscription {
 	t.Helper()

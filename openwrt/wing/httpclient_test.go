@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/daeuniverse/dae-wing/routercore"
 	"io"
 	"net"
 	"net/http"
@@ -84,12 +85,22 @@ func TestRouterHTTPProtocolDownload(t *testing.T) {
 	}
 	var fixture struct {
 		Target string
-		Cases  []struct{ Name, Link, Failure string }
+		Cases  []struct {
+			Name, Link, Failure string
+			Clash               routercore.Object
+		}
 	}
 	if err := json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal(err)
 	}
 	for _, item := range fixture.Cases {
+		if item.Clash != nil {
+			var e error
+			item.Link, e = routercore.ClashLink(item.Clash)
+			if e != nil {
+				t.Fatal(item.Name, e)
+			}
+		}
 		t.Run(item.Name, func(t *testing.T) {
 			log := logrus.New()
 			log.SetOutput(io.Discard)

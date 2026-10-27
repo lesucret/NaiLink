@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/daeuniverse/dae-wing/common"
 	"github.com/daeuniverse/dae-wing/db"
+	"github.com/daeuniverse/dae-wing/routercore"
 	dialer "github.com/daeuniverse/dae/component/outbound/dialer"
 	D "github.com/daeuniverse/outbound/dialer"
 	"github.com/daeuniverse/outbound/netproxy"
@@ -32,7 +33,10 @@ func TestRouterProtocolInteroperability(t *testing.T) {
 	var fixture struct {
 		Target string
 		UDP    string
-		Cases  []struct{ Name, Link, Failure string }
+		Cases  []struct {
+			Name, Link, Failure string
+			Clash               routercore.Object
+		}
 	}
 	if err = json.Unmarshal(raw, &fixture); err != nil {
 		t.Fatal(err)
@@ -45,6 +49,13 @@ func TestRouterProtocolInteroperability(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range fixture.Cases {
+		if c.Clash != nil {
+			var e error
+			c.Link, e = routercore.ClashLink(c.Clash)
+			if e != nil {
+				t.Fatal(c.Name, e)
+			}
+		}
 		t.Run(c.Name, func(t *testing.T) {
 			log := logrus.New()
 			log.SetOutput(io.Discard)

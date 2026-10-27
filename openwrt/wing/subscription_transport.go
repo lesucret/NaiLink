@@ -137,6 +137,9 @@ func fetchLinksContext(ctx context.Context, link string, names ...*string) ([]st
 	if directError == nil {
 		return links, nil
 	}
+	if isSubscriptionContentError(directError) {
+		return nil, directError
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

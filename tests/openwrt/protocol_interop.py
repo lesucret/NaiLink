@@ -198,6 +198,7 @@ def run_fixture(args, http_port, udp_port):
             inbounds.append({"type": "shadowsocks", "tag": method, "listen": "127.0.0.1", "listen_port": number, "method": method, "password": password})
             user = base64.urlsafe_b64encode((method + ":" + password).encode()).decode().rstrip("=")
             cases.append({"Name": method, "Link": f"ss://{user}@127.0.0.1:{number}"})
+            cases.append({'Name': 'clash-' + method, 'Clash': {'name': 'clash-ss', 'type': 'ss', 'server': '127.0.0.1', 'port': number, 'cipher': method, 'password': password, 'udp': True}})
             if method == 'chacha20-ietf-poly1305':
                 native_cases.append({'Name': 'ss-exporter-plain-tcp', 'Link': f'ss://{user}@127.0.0.1:{number}?type=tcp&headerType=none'})
             if method.startswith('2022'):
@@ -226,6 +227,16 @@ def run_fixture(args, http_port, udp_port):
                     if transport == 'ws':
                         link += '&path=%2Ffixture'
                 cases.append({'Name': kind + '-tls-' + transport, 'Link': link})
+                clash = {'name': 'clash-' + kind, 'type': kind, 'server': '127.0.0.1', 'port': number, 'tls': True, 'skip-cert-verify': False, 'sni': 'vless.fixture.test', 'udp': True, 'network': transport}
+                if kind == 'vmess':
+                    clash.update({'uuid': uuid, 'alterId': 0, 'cipher': 'auto'})
+                else:
+                    clash['password'] = 'fixture@pass:2026'
+                if transport == 'ws':
+                    clash.update({'ws-opts': {'path': '/fixture', 'headers': {'Host': 'vless.fixture.test'}}, 'ws-path': '/fixture', 'ws-headers': {'Host': 'vless.fixture.test'}})
+                cases.append({'Name': 'clash-' + kind + '-' + transport, 'Clash': clash})
+                bad = {**clash, 'sni': 'mismatch.invalid'}
+                cases.append({'Name': 'clash-' + kind + '-' + transport + '-certificate-rejected', 'Clash': bad, 'Failure': 'tls_failed'})
                 if kind == 'trojan' and transport == 'tcp':
                     cases.append({'Name': 'trojan-exporter-udp-enabled', 'Link': link + '&udp=1'})
         number = port(True)

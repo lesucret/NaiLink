@@ -54,6 +54,21 @@ func directFixture(t *testing.T, code int) *atomic.Int32 {
 	return &calls
 }
 
+func TestSubscriptionInvalidDocumentDoesNotRetryThroughOtherExits(t *testing.T) {
+	original := http.DefaultTransport
+	var calls atomic.Int32
+	http.DefaultTransport = fixtureTransport(func(*http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("<html>expired private-token</html>"))}, nil
+	})
+	t.Cleanup(func() { http.DefaultTransport = original })
+	proxyHelper(t, "auto", "127.0.0.1:1")
+	_, err := fetchLinks("https://fixture.invalid?key=private-token")
+	if !isSubscriptionContentError(err) || calls.Load() != 1 || strings.Contains(err.Error(), "private-token") {
+		t.Fatal("content error retried or leaked private data")
+	}
+}
+
 func proxyHelper(t *testing.T, mode, address string) string {
 	t.Helper()
 	file := filepath.Join(t.TempDir(), "proxy helper")

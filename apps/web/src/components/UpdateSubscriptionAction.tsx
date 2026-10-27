@@ -23,8 +23,8 @@ export function UpdateSubscriptionAction({ id, loading, quiet }: { id: string; l
         {updateSubscriptionsMutation.isError ? t('panel.retry') : t('panel.updateSubscription')}
       </Button>
       {updateSubscriptionsMutation.isError && (
-        <p role="alert" className="text-xs text-destructive">
-          {t('panel.updateFailed')}
+        <p role="alert" className="max-w-lg whitespace-pre-line break-words text-xs text-destructive">
+          {updateSubscriptionsMutation.error?.message || t('panel.updateFailed')}
         </p>
       )}
     </div>

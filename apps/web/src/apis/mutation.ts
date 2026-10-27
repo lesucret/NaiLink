@@ -17,6 +17,7 @@ import { useGQLQueryClient } from '~/contexts'
 import { graphql } from '~/schemas/gql'
 import { latencyResultFields } from '~/utils/latency'
 import { routerMode } from '~/utils/router-mode'
+import { subscriptionUpdateFailure } from '~/utils/subscription-update'
 
 export function useSetJsonStorageMutation() {
   const gqlClient = useGQLQueryClient()
@@ -735,8 +736,8 @@ export function useImportSubscriptionsMutation() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (data: ImportArgument[]) =>
-      Promise.all(
+    mutationFn: async (data: ImportArgument[]) => {
+      const results = await Promise.allSettled(
         data.map((subscription) =>
           gqlClient.request(
             graphql(`
@@ -760,8 +761,12 @@ export function useImportSubscriptionsMutation() {
             },
           ),
         ),
-      ),
-    onSuccess: () => {
+      )
+      const failure = subscriptionUpdateFailure(results, true)
+      if (failure) throw failure
+      return results
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY_SUBSCRIPTION })
     },
   })
@@ -789,8 +794,8 @@ export function useUpdateSubscriptionsMutation() {
           ),
         ),
       )
-      const failures = results.filter((result) => result.status === 'rejected')
-      if (failures.length) throw new Error('Subscription update failed')
+      const failure = subscriptionUpdateFailure(results)
+      if (failure) throw failure
       return results
     },
     onSettled: () => {

@@ -32,13 +32,26 @@
   <li>提交后，查看订阅的节点数量和更新时间，点击<strong>查看节点</strong>进入订阅节点列表。</li>
 </ol>
 <p>手动填写的名称优先；后续更新不会自动覆盖已有名称。订阅 URL 是访问凭据，请勿公开发送到群组或问题反馈中。</p>
-<div class="callout">
-  <strong>拿到链接，但导入后没有节点？</strong>
-  <p>
-    确认服务商给的是客户端订阅，而非网页、登录页或鉴权错误响应。SIP008 等已支持格式可解析；其他客户端的完整配置、所有
-    Clash YAML 扩展不能仅凭文件名认定兼容。先用一条真实节点的分享链接验证。
-  </p>
-</div>
+<h2 id="clash">Clash 订阅格式与限制</h2>
+<p>
+  0.6.42 起支持含 <code>proxies</code> 列表的 Clash YAML / JSON，也支持 SIP008、普通或 Base64 节点链接列表。已有 Clash
+  订阅可直接点击<strong>更新订阅</strong>，无需删除重建。
+</p>
+<p>
+  常见 SS / SS2022、SSR、VMess AEAD、VLESS / REALITY、Trojan、Hysteria2、TUIC v5、AnyTLS、SOCKS5、HTTP(S)
+  节点会转换为现有节点格式，保留已支持的认证、证书校验、SNI、WebSocket / gRPC
+  参数。运行时仍以当前内核的兼容性报告为准；不代表所有 Clash 扩展均可使用。
+</p>
+<p>
+  只提取节点，不接管配置中的 DNS、规则、监听或控制端口；不读取本地文件，不自动下载
+  <code>proxy-providers</code> 引用。如果文件只有外部引用，请向服务商获取包含 <code>proxies</code> 的节点订阅。Clash
+  SSH、WireGuard、Snell 等尚未映射类型可继续用分享链接或已支持的原生节点格式导入。
+</p>
+<p>
+  订阅最多 4 MiB / 4096
+  节点。未知参数、格式错误、网页响应或保存失败会保留该订阅原有全部节点，并显示中文原因；内容不变时节点 ID
+  不变，手动加入群组的旧节点也不会被自动删除。失败项可单独重试。
+</p>
 <h2 id="subscription-update">手动与自动更新</h2>
 <p>
   订阅卡片上的<strong>更新订阅</strong>会重新获取节点。更新时间和数量可帮助判断本次更新是否成功；编辑、移除等操作在更多菜单中，链接和自动更新规则可展开详情查看。

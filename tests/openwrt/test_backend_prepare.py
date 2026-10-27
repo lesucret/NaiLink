@@ -11,6 +11,7 @@ SPEC = importlib.util.spec_from_file_location("prepare_wing", ROOT / "openwrt/pr
 PREPARE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PREPARE)
 SOURCES = (
+    "go.mod",
     "webrender/webrender.go",
     "graphql/service/config/mutation_utils.go",
     "graphql/service/dns/mutation_utils.go",

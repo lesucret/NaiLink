@@ -24,6 +24,7 @@ import (
 type routerInteropCase struct {
 	Name, Link, Failure, Family, TargetAlt, UDPAlt string
 	TCPOnly                                        bool
+	Clash                                          routercore.Object
 }
 
 // Use independent protocol servers, not mocked dialers or the embedded dae
@@ -85,6 +86,13 @@ func TestRouterCoreProtocolInteroperability(t *testing.T) {
 	var links []string
 	var cases []routerInteropCase
 	for _, c := range append(fixture.Cases, fixture.NativeCases...) {
+		if c.Clash != nil {
+			var e error
+			c.Link, e = routercore.ClashLink(c.Clash)
+			if e != nil {
+				t.Fatal(c.Name, e)
+			}
+		}
 		if strings.HasPrefix(c.Link, "juicity:") {
 			continue
 		} // explicitly unsupported by this adapter

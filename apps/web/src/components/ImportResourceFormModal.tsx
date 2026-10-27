@@ -16,6 +16,7 @@ import {
 } from '~/components/ui/scrollable-dialog'
 import { useSetValue } from '~/hooks/useSetValue'
 import { routerMode } from '~/utils/router-mode'
+import { safeSubscriptionReason } from '~/utils/subscription-update'
 import { NodeProtocolGuide } from './NodeProtocolGuide'
 
 const schema = z.object({
@@ -50,6 +51,7 @@ export function ImportResourceFormModal({
 }) {
   const { t } = useTranslation()
   const [submitFailed, setSubmitFailed] = useState(false)
+  const [failureReason, setFailureReason] = useState('')
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -90,7 +92,11 @@ export function ImportResourceFormModal({
       await onSubmitProp(data)
       onClose()
       reset(defaultValues)
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : ''
+      setFailureReason(
+        /^\d+\/\d+ 份订阅导入失败/.test(message) && !/:\/\//.test(message) ? message : safeSubscriptionReason(error),
+      )
       setSubmitFailed(true)
     }
   }
@@ -111,10 +117,16 @@ export function ImportResourceFormModal({
         </ScrollableDialogHeader>
         <ScrollableDialogBody>
           {resourceKind === 'node' && routerMode && <NodeProtocolGuide opened={opened} />}
+          {resourceKind !== 'node' && routerMode && (
+            <p className="mb-4 text-sm leading-relaxed text-muted-foreground">
+              支持 Clash YAML / JSON（含 proxies）、SIP008 和普通 / Base64 节点订阅。仅导入节点，保留现有 DNS
+              与分流设置。
+            </p>
+          )}
           <form onSubmit={handleSubmit(onSubmit)}>
             {submitFailed && (
-              <p role="alert" className="mb-3 text-sm text-destructive">
-                {t('panel.saveFailed')}
+              <p role="alert" className="mb-3 whitespace-pre-line break-words text-sm text-destructive">
+                {resourceKind !== 'node' && routerMode ? failureReason : t('panel.saveFailed')}
               </p>
             )}
             <fieldset disabled={isSubmitting}>

@@ -33,6 +33,7 @@ def router_node_model(text):
     text = text.replace("dialer.InstanceOption{DisableCheck: false}", "dialer.InstanceOption{DisableCheck: true}")
     if "defer d.Close()" not in text:
         text = text.replace("property := d.Property()", "defer d.Close()\n\tproperty := d.Property()", 1)
+    text = text.replace('if err != nil {\n\t\treturn nil, err\n\t}\n\tdefer d.Close()', 'if err != nil {\n\t\treturn nil, routercore.OptionProblem("invalid_node")\n\t}\n\tdefer d.Close()', 1)
     return text
 
 
@@ -253,6 +254,16 @@ def _prepare_in_place(root):
     manifest = root / ".daed-openwrt-prepare.json"
     previous = json.loads(manifest.read_text()) if manifest.exists() else {}
     digest = lambda value: hashlib.sha256(value).hexdigest()
+    module = root / "go.mod"
+    module_text = module.read_text(encoding="utf-8")
+    expected_module = previous.get("go.mod", "1d01ba984081f43bbbea370c8c63af2cc698a8076d2043e021d66ef3a40c1887")
+    if digest(module_text.encode()) != expected_module:
+        raise ValueError("Unknown backend source: go.mod; refusing to overwrite it")
+    if not re.search(r'^\s*gopkg.in/yaml.v3 v3.0.1\s*$', module_text, re.M):
+        # This exact small YAML decoder is already pinned by dae-core and in
+        # go.sum. Declare its direct use without upgrading the dependency graph.
+        module_text = module_text.replace("require (\n", "require (\n\tgopkg.in/yaml.v3 v3.0.1\n", 1)
+    module.write_text(module_text, encoding="utf-8", newline="\n")
     marker = "// OpenWrt subscription transport: prepared by openwrt/prepare-wing.py.\n"
     if text.startswith(marker):
         if previous.get("mutation_utils.go") != digest(text.encode()):
@@ -315,6 +326,28 @@ func fetchLinksDirectContext(ctx context.Context, subscriptionLink string, names
 
 func _fetchLinksContext(ctx context.Context, subscriptionLink string, transport http.RoundTripper, timeout time.Duration, names ...*string) (links []string, err error) {''')
     text = text.replace('http.NewRequest("GET", subscriptionLink, nil)', 'http.NewRequestWithContext(ctx, "GET", subscriptionLink, nil)')
+    # Detect the document format before extracting links. Scanning arbitrary
+    # YAML/HTML for :// can turn DNS/help URLs into fake proxy nodes.
+    if 'links, err = decodeSubscriptionPayload(b)' not in text:
+        begin, end = text.index('\t// Resolve node links.'), text.index('\n\tif len(names)', text.index('\t// Resolve node links.'))
+        text = text[:begin] + '\tlinks, err = decodeSubscriptionPayload(b)\n\tif err != nil { return nil, err }\n' + text[end:]
+    text = text.replace('\n\t"github.com/daeuniverse/dae/common/subscription"', '')
+    if 'hasAnyCandidate := false' in text:
+        begin, end = text.index('\thasAnyCandidate := false'), text.index('\n\treturn &ImportResult{')
+        text = text[:begin] + '''\tfor _, candidate := range result {
+        if candidate.Error != nil { return nil, fmt.Errorf("订阅节点保存失败，未导入该订阅；请重试。") }
+    }
+''' + text[end:]
+    text = replace_go_function(text, 'func fetchLinksDirectContext(', '''
+    links, directError := _fetchLinksContext(ctx, subscriptionLink, http.DefaultTransport, 5*time.Second, names...)
+    if directError == nil || isSubscriptionContentError(directError) { return links, directError }
+    if ctx.Err() != nil { return nil, ctx.Err() }
+    links, routeError := _fetchLinksContext(ctx, subscriptionLink, dae.HttpTransport, 5*time.Second, names...)
+    if routeError == nil { return links, nil }
+    if isSubscriptionContentError(routeError) { return nil, routeError }
+    if errors.Is(routeError, dae.ErrControlPlaneNotInit) { return nil, directError }
+    return nil, fmt.Errorf("%v (direct); %w (route)", directError, routeError)
+''')
     text = text.replace('// Retry with dae routing.', 'if ctx.Err() != nil { return nil, ctx.Err() }\n\t\t// Retry with dae routing.') if 'if ctx.Err() != nil' not in text else text
     text = text.replace('links, err := fetchLinks(argument.Link, &detectedName)', 'links, err := fetchLinksContext(c.Statement.Context, argument.Link, &detectedName)')
     # A scheduler must read the committed new row; changing it before commit
@@ -334,8 +367,8 @@ func _fetchLinksContext(ctx context.Context, subscriptionLink string, transport 
         cron = cron.replace('AddUpdateScheduler(ctx, id)', 'AddUpdateScheduler(schedulerCtx, id)')
     text = router_transactions(text[:begin]) + cron
     source.write_text(text, encoding="utf-8", newline="\n")
-    generated = {"mutation_utils.go": digest(text.encode())}
-    for name in ("subscription_transport.go", "subscription_transport_test.go", "subscription_name.go", "subscription_name_test.go", "subscription_update.go", "subscription_update_test.go"):
+    generated = {"mutation_utils.go": digest(text.encode()), "go.mod": digest(module_text.encode())}
+    for name in ("subscription_transport.go", "subscription_transport_test.go", "subscription_name.go", "subscription_name_test.go", "subscription_update.go", "subscription_update_test.go", "subscription_parse.go", "subscription_parse_test.go"):
         destination = target / name
         data = (HERE / "wing" / name).read_bytes()
         if destination.exists() and destination.read_bytes() != data and previous.get(name) != digest(destination.read_bytes()):
@@ -567,6 +600,7 @@ def prepare(root):
     # Validate/transform the small reviewed input set in isolation first. An
     # unknown edit in a late file must not leave earlier sources half updated.
     inputs = (
+        "go.mod",
         "webrender/webrender.go",
         "cmd/run.go", "dae/run.go", "dae/httpclient.go", "dae/runtime.go",
         "graphql/mutation.go", "graphql/root_schema.go", "graphql/service/config/mutation_utils.go",
@@ -586,7 +620,7 @@ def prepare(root):
     manifest = root / ".daed-openwrt-prepare.json"
     previous = json.loads(manifest.read_text()) if manifest.exists() else {}
     def relative(key):
-        return key if "/" in key else "graphql/service/subscription/" + key
+        return key if "/" in key or key == "go.mod" else "graphql/service/subscription/" + key
     with tempfile.TemporaryDirectory(prefix=".nailink-prepare-", dir=root.parent) as temporary:
         stage = Path(temporary)
         staged = set(inputs) | {relative(key) for key in previous}

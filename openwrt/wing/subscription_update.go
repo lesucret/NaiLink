@@ -79,34 +79,42 @@ func updateSubscriptionSafely(ctx context.Context, id uint) (*db.Subscription, e
 	if current.Link != before.Link {
 		return nil, errors.New("subscription changed during download; retry the update")
 	}
-	subQuery := tx.Raw(`select nodes.id from nodes inner join group_nodes on group_nodes.node_id = nodes.id where subscription_id = ?`, id)
-	if err := tx.Where("subscription_id = ?", id).Where("id not in (?)", subQuery).
-		Select(clause.Associations).Delete(&db.Node{}).Error; err != nil {
+	var existing []db.Node
+	if err := tx.Where("subscription_id = ?", id).Find(&existing).Error; err != nil {
 		return nil, err
+	}
+	known := make(map[string]bool, len(existing))
+	for _, n := range existing {
+		known[n.Link] = true
+	}
+	subQuery := tx.Raw(`select nodes.id from nodes inner join group_nodes on group_nodes.node_id = nodes.id where subscription_id = ?`, id)
+	removed := tx.Where("subscription_id = ?", id).Where("id not in (?)", subQuery).Where("link not in ?", links).
+		Select(clause.Associations).Delete(&db.Node{})
+	if removed.Error != nil {
+		return nil, removed.Error
 	}
 	args := make([]*internal.ImportArgument, 0, len(links))
 	for _, link := range links {
-		args = append(args, &internal.ImportArgument{Link: link})
+		if !known[link] {
+			args = append(args, &internal.ImportArgument{Link: link})
+		}
 	}
 	results, err := node.Import(tx, false, &id, args)
 	if err != nil {
 		return nil, err
 	}
-	valid := false
 	for _, result := range results {
-		if result.Error == nil {
-			valid = true
-			break
+		if result.Error != nil {
+			return nil, errors.New("订阅节点保存失败，已保留原节点；请重试。")
 		}
-	}
-	if !valid {
-		return nil, errors.New("interrupt to update subscription: no any valid node can be imported")
 	}
 	if err := tx.Model(&current).Clauses(clause.Returning{}).Update("updated_at", time.Now()).Error; err != nil {
 		return nil, err
 	}
-	if err := AutoUpdateVersionByIds(tx, []uint{id}); err != nil {
-		return nil, err
+	if len(args) > 0 || removed.RowsAffected > 0 {
+		if err := AutoUpdateVersionByIds(tx, []uint{id}); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit().Error; err != nil {
 		return nil, err
