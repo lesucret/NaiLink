@@ -34,6 +34,7 @@ SOURCES = (
     "dae-core/component/outbound/dialer/register.go",
     "dae-core/component/interface_manager.go",
     "dae-core/control/dial.go", "dae-core/control/dns_control.go",
+    "dae-core/control/dns_control_cache_cleanup_test.go",
     "dae-core/control/dns.go", "dae-core/control/dns_lifecycle_test.go",
     "dae-core/control/control_plane.go",
     "dae-core/control/dns_udp_packetconn_test.go",
@@ -66,6 +67,10 @@ class BackendPrepareTests(unittest.TestCase):
         self.assertEqual((self.root / "dae/runtime.go").read_bytes(), (ROOT / "openwrt/wing/runtime.go").read_bytes())
         self.assertIn("return c.routerRouteDial(ctx, p)", (self.root / "dae-core/control/dial.go").read_text(encoding="utf-8"))
         self.assertIn("routerDNSPrimaryTimeout(ctx, upstream, primaryDialArg)", (self.root / "dae-core/control/dns_control.go").read_text(encoding="utf-8"))
+        expiry = (self.root / "dae-core/control/dns_control_cache_cleanup_test.go").read_text(encoding="utf-8")
+        self.assertIn("ctrl.evictExpiredDnsCache(deadline.Add(time.Nanosecond))", expiry)
+        self.assertIn('"knowledge should exist before expiry"', expiry)
+        self.assertIn('"expired cache entry should be evicted"', expiry)
         self.assertIn("c.routerResolveBootstrap(ctx, host, network, race, resolve)", (self.root / "dae-core/control/control_plane.go").read_text(encoding="utf-8"))
         self.assertIn("return pc.routerRoundTrip(ctx, data)", (self.root / "dae-core/control/dns.go").read_text(encoding="utf-8"))
         lifecycle = (self.root / "dae/run.go").read_text(encoding="utf-8")

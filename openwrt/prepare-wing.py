@@ -24,6 +24,23 @@ TRANSACTION_DEFER = '''defer func() {
 	}()'''
 
 
+def router_dns_expiry_test(text):
+    # Expiry accepts an explicit instant. Do not require a QEMU runner to reach
+    # the pre-expiry assertion in 20 ms, or weaken the cache/knowledge checks.
+    name = "func TestDnsController_EvictExpiredDnsCache_RemovesKnowledgeForLastScopedEntry("
+    start = text.index(name)
+    end = text.index("\nfunc ", start + len(name))
+    body = text[start:end]
+    if "deadline.Add(time.Nanosecond)" in body:
+        return text
+    if "deadline := now.Add(20 * time.Millisecond)" not in body:
+        raise ValueError("Unknown DNS expiry test; review before applying")
+    body = body.replace("\trequire.NoError(t, ctrl.__updateDnsCacheDeadline", "\tdeadline := time.Now().Add(time.Hour)\n\trequire.NoError(t, ctrl.__updateDnsCacheDeadline", 1)
+    body = body.replace("\t\tdeadline := now.Add(20 * time.Millisecond)\n", "")
+    body = body.replace("\ttime.Sleep(40 * time.Millisecond)\n\tctrl.evictExpiredDnsCache(time.Now())", "\tctrl.evictExpiredDnsCache(deadline.Add(time.Nanosecond))")
+    return text[:start] + body + text[end:]
+
+
 def router_node_model(text):
     text = text.replace('if strings.HasPrefix(strings.TrimSpace(link), "singbox://") || strings.HasPrefix(strings.TrimSpace(link), "{")', 'if routercore.IsNativeURI(link) || strings.HasPrefix(strings.TrimSpace(link), "{")')
     if 'routerNativeNode(link, tag, subscriptionId)' not in text:
@@ -389,6 +406,7 @@ func _fetchLinksContext(ctx context.Context, subscriptionLink string, transport 
         "dae-core/component/interface_manager.go": ("c8a97c9851c2c21d7af3b48d1c2fc514a80e6c838dce25b9ef15888e02752d2c", lambda value: (HERE / "wing/interface_manager.go").read_text(encoding="utf-8")),
         "dae-core/control/dial.go": ("4e9948fde01eed541c5a828a83cdae8f74278ed55d95958e145bd1f113964bfe", router_control_dial),
         "dae-core/control/dns_control.go": ("5f57ad79f164b45f226e0acc130f2b64c1ec4f0eaae90bef6368810339dd8fb8", router_dns_recovery),
+        "dae-core/control/dns_control_cache_cleanup_test.go": ("1a4521b8392d843d6c36d60fda9ed14897aa0fe056480441bef1f2f6b09c544b", router_dns_expiry_test),
         "dae-core/control/dns.go": ("c1e0bc78f71bff6ef4f15ea02f9a078a3f1d7776537578155055999a9b2b28d2", router_dns_transport),
         "dae-core/control/control_plane.go": ("8b57c9d9635aa6c764319a2263421263a52f4dfde8ac398b1d47929b71e53e76", router_bootstrap),
         "dae-core/control/dns_lifecycle_test.go": ("075d244882bb623dce5e37fae748594ee602611ffa2e2697c51d49f46026f44d", lambda value: value.replace('func(client *http.Client,', 'func(ctx context.Context, client *http.Client,')),
@@ -425,7 +443,7 @@ type Mutation {
         elif relative in ("graphql/service/node/latency_mutation_utils.go", "graphql/service/node/latency_resolver.go", "dae/runtime.go", "dae/httpclient.go", "dae-core/component/interface_manager.go"):
             replacement = {"latency_mutation_utils.go": "node_latency.go", "latency_resolver.go": "node_latency_resolver.go"}.get(relative.split("/")[-1], relative.split("/")[-1])
             data = (HERE / "wing" / replacement).read_bytes()
-        elif relative in ("cmd/run.go", "dae/run.go") or transform in (router_node_model, router_transactions, router_control_dial, router_dns_recovery, router_dns_transport, router_bootstrap, router_udp_pool_test):
+        elif relative in ("cmd/run.go", "dae/run.go") or transform in (router_node_model, router_transactions, router_control_dial, router_dns_recovery, router_dns_transport, router_bootstrap, router_udp_pool_test, router_dns_expiry_test):
             data = transform(data.decode()).encode()
         destination.write_bytes(data)
         generated[relative] = digest(data)
@@ -618,6 +636,7 @@ def prepare(root):
         "dae-core/component/outbound/dialer/dialer.go", "dae-core/component/outbound/dialer/register.go",
         "dae-core/component/interface_manager.go",
         "dae-core/control/dial.go", "dae-core/control/dns_control.go",
+        "dae-core/control/dns_control_cache_cleanup_test.go",
         "dae-core/control/dns.go", "dae-core/control/dns_lifecycle_test.go", "dae-core/control/control_plane.go",
         "dae-core/control/dns_udp_packetconn_test.go",
         "dae-core/common/subscription/subscription.go",
