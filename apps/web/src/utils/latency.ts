@@ -70,6 +70,7 @@ export function formatLatencyLabel(result: NodeLatencyProbeResult | undefined, t
       authentication_failed: 'authentication',
       check_target_failed: 'target',
       udp_unsupported: 'udpUnsupported',
+      core_ports_unavailable: 'ports',
     } as const
     const reason =
       result.message && Object.hasOwn(reasons, result.message)

@@ -277,6 +277,7 @@
       "extension": "Extension required",
       "torBootstrap": "Tor bootstrap failed",
       "udpUnsupported": "UDP unsupported",
+      "ports": "Test ports busy",
       "nodeConnect": "Node connection timed out",
       "tlsHandshake": "TLS handshake timed out",
       "websocket": "WebSocket handshake failed",

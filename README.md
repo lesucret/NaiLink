@@ -57,7 +57,7 @@ uclient-fetch -O /tmp/nailink-install.sh https://github.com/slobys/NaiLink/relea
 
 **0.6.43 优化节点测试**：三内核普通节点手动 HTTP 测试统一最多 8 秒，减少慢节点误判；增加连接、TLS / WebSocket 握手和入口网关错误提示。自动选路及现有配置保持。[超时排查说明 →](https://slobys.github.io/NaiLink/troubleshooting.html#node-timeout)
 
-**0.6.44 优化 mihomo DNS**：复用有上限的 TCP / 加密 DNS 连接，缓冲短时查询突发；失效连接按原路由重建，停止内核时释放连接与排队请求。节点、DNS 上游与分流配置保留。[说明 →](https://slobys.github.io/NaiLink/troubleshooting.html#dns-stability)
+**0.6.44 优化 mihomo DNS**：复用有上限的 TCP / 加密 DNS 连接，缓冲短时查询突发；失效连接按原路由重建，停止内核时释放连接与排队请求。同时修复私有节点测试启动时的端口争用恢复。节点、DNS 上游与分流配置保留。[说明 →](https://slobys.github.io/NaiLink/troubleshooting.html#dns-stability)
 
 ## 开始使用
 

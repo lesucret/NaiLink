@@ -54,6 +54,7 @@ describe('latency colors', () => {
       ['tls_handshake_timeout', 'tlsHandshake'],
       ['websocket_failed', 'websocket'],
       ['gateway_failed', 'gateway'],
+      ['core_ports_unavailable', 'ports'],
     ]) {
       expect(formatLatencyLabel({ ...measured(0), alive: false, message }, translate)).toBe(
         `latency.nodeFailure.${key}`,

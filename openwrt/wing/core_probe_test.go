@@ -25,6 +25,97 @@ func (f routerProbeDialFunc) DialContext(ctx context.Context, network, address s
 	return f(ctx, network, address)
 }
 
+func TestPrivateProbePortCollisionRecoveryIsBoundedAndCleansBeforeRetry(t *testing.T) {
+	for _, scenario := range []string{"recover", "exhausted", "other_failure", "cancelled", "cleanup_failed", "factory_failed"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			starts, live := 0, 0
+			session, err := routerStartPrivateProbe(ctx, func() (routerCoreSession, error) {
+				if live != 0 {
+					t.Fatal("new process started before the previous one was cleaned")
+				}
+				starts++
+				if scenario == "factory_failed" {
+					return nil, errors.New("singbox_configuration_invalid")
+				}
+				live++
+				s := &coreFakeSession{live: &live, done: make(chan error), readyErr: errors.New("core_ports_unavailable")}
+				switch scenario {
+				case "recover":
+					if starts == 3 {
+						s.readyErr = nil
+					}
+				case "other_failure":
+					s.readyErr = errors.New("core_start_failed")
+				case "cancelled":
+					cancel()
+				case "cleanup_failed":
+					s.stopErr = errors.New("process did not stop")
+				}
+				return s, nil
+			})
+			if scenario == "recover" {
+				if err != nil || starts != 3 || live != 1 || session == nil {
+					t.Fatal("listener collision did not recover", starts, live, err)
+				}
+				if routerStopProbe(session) != nil || live != 0 {
+					t.Fatal("successful private process was not cleaned")
+				}
+				return
+			}
+			want, wantStarts, wantLive := "core_ports_unavailable", 3, 0
+			switch scenario {
+			case "other_failure":
+				want, wantStarts = "core_start_failed", 1
+			case "cancelled":
+				want, wantStarts = context.Canceled.Error(), 1
+			case "cleanup_failed":
+				want, wantStarts, wantLive = "core_cleanup_failed", 1, 1
+			case "factory_failed":
+				want, wantStarts = "singbox_configuration_invalid", 1
+			}
+			if err == nil || err.Error() != want || starts != wantStarts || live != wantLive || session != nil {
+				t.Fatal("retried a non-port failure, exceeded limit or leaked process", starts, live, err)
+			}
+		})
+	}
+}
+
+func TestNativeReadinessClassifiesRealListenerCollision(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	other, bindErr := net.Listen("tcp4", listener.Addr().String())
+	if bindErr == nil {
+		other.Close()
+		t.Fatal("fixture failed to create a real port collision")
+	}
+	log := logrus.New()
+	log.SetOutput(io.Discard)
+	s := &routerSingBoxSession{exit: make(chan struct{})}
+	writer := &sbLogWriter{log: log, startupPortConflict: &s.portConflict}
+	line := "FATAL[0000] start service: external controller listen error: " + bindErr.Error() + "\n"
+	_, _ = writer.Write([]byte(line[:len(line)/2]))
+	_, _ = writer.Write([]byte(line[len(line)/2:]))
+	close(s.exit)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err = s.Ready(ctx); err == nil || err.Error() != "core_ports_unavailable" {
+		t.Fatal("real listener collision lost its safe category", err)
+	}
+	for _, text := range []string{"ERROR dial tcp secret:443: bind: address already in use\n", "ERROR listen tcp: permission denied\n", "INFO listen tcp: bind: address already in use\n"} {
+		negative := &routerSingBoxSession{}
+		writer := &sbLogWriter{log: log, startupPortConflict: &negative.portConflict}
+		_, _ = writer.Write([]byte(text))
+		if negative.portConflict.Load() {
+			t.Fatal("unrelated child failure was treated as a listener collision")
+		}
+	}
+}
+
 func TestRouterCoreSlowHTTPResponseIsMeasuredRatherThanRejected(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {

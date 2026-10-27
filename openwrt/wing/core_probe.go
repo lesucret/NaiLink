@@ -245,30 +245,55 @@ func routerStartProbe(ctx context.Context, conf *daeConfig.Config, hooks ...logr
 	for _, hook := range hooks {
 		log.AddHook(hook)
 	}
-	session, err := newRouterNativeSession(ctx, log, conf, nil, false, RouterCoreName(), func(profile sbObject, ports sbPorts) {
-		users := []sbObject{{"username": "nailink", "password": ports.Secret}}
-		var rules []sbObject
-		for _, group := range conf.Group {
-			users = append(users, sbObject{"username": group.Name, "password": ports.Secret})
-			rules = append(rules, sbObject{"auth_user": []string{group.Name}, "action": "route", "outbound": "node:" + group.Name})
-		}
-		profile["inbounds"].([]sbObject)[0]["users"] = users
-		route := profile["route"].(sbObject)
-		route["rules"] = append(rules, route["rules"].([]sbObject)...)
+	session, err := routerStartPrivateProbe(ctx, func() (routerCoreSession, error) {
+		return newRouterNativeSession(ctx, log, conf, nil, false, RouterCoreName(), func(profile sbObject, ports sbPorts) {
+			users := []sbObject{{"username": "nailink", "password": ports.Secret}}
+			var rules []sbObject
+			for _, group := range conf.Group {
+				users = append(users, sbObject{"username": group.Name, "password": ports.Secret})
+				rules = append(rules, sbObject{"auth_user": []string{group.Name}, "action": "route", "outbound": "node:" + group.Name})
+			}
+			profile["inbounds"].([]sbObject)[0]["users"] = users
+			route := profile["route"].(sbObject)
+			route["rules"] = append(rules, route["rules"].([]sbObject)...)
+		})
 	})
 	if err != nil {
 		return nil, err
 	}
-	if err = session.Ready(ctx); err != nil {
-		routerStopProbe(session)
-		return nil, err
-	}
 	return session.(*routerSingBoxSession), nil
 }
-func routerStopProbe(session routerCoreSession) {
+func routerStartPrivateProbe(ctx context.Context, start func() (routerCoreSession, error)) (routerCoreSession, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		session, err := start()
+		if err != nil {
+			return nil, err
+		}
+		if err = session.Ready(ctx); err == nil {
+			return session, nil
+		}
+		if routerStopProbe(session) != nil {
+			return nil, errors.New("core_cleanup_failed")
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err.Error() != "core_ports_unavailable" || attempt == 2 {
+			return nil, err
+		}
+		if manager := currentRouterCoreManager(); manager != nil && manager.log != nil {
+			manager.log.WithFields(logrus.Fields{"phase": "private_probe_start", "code": "core_ports_unavailable", "attempt": attempt + 1}).Warn("Node test listener conflicted; retrying with new private ports")
+		}
+	}
+	return nil, errors.New("core_ports_unavailable")
+}
+func routerStopProbe(session routerCoreSession) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_ = session.Stop(ctx)
+	return session.Stop(ctx)
 }
 func ProbeRouterCoreNodes(ctx context.Context, links []string, global daeConfig.Global) ([]RouterCoreProbe, error) {
 	return ProbeRouterCoreNodesProgress(ctx, links, global, nil)

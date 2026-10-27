@@ -107,6 +107,7 @@ export const maintenanceMessages: Record<string, string> = {
   core_state_failed: '无法保存内核状态，请检查剩余存储和文件权限。',
   core_snapshot_failed: '无法保存当前运行配置，未停止原内核。',
   core_start_failed: '目标内核未能启动，正在检查原内核恢复结果。',
+  core_ports_unavailable: '内核监听端口冲突或不足，请稍后重试；现有节点和配置保留。',
   core_not_ready: '目标内核未通过就绪检查，请查看恢复结果和日志。',
   core_request_failed: '内核操作未获后台确认，请重新读取状态，并检查运行日志；现有配置保留。',
   core_dns_failed: '目标内核 DNS 查询未通过检查，正在恢复原内核。',

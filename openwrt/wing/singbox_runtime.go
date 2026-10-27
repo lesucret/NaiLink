@@ -75,10 +75,11 @@ func (w *routerCoreBoundedWriter) Write(p []byte) (int, error) {
 }
 
 type sbLogWriter struct {
-	engine  string
-	mu      sync.Mutex
-	pending []byte
-	log     *logrus.Logger
+	engine              string
+	mu                  sync.Mutex
+	pending             []byte
+	log                 *logrus.Logger
+	startupPortConflict *atomic.Bool
 }
 
 func (w *sbLogWriter) Write(data []byte) (int, error) {
@@ -109,6 +110,13 @@ func (w *sbLogWriter) Write(data []byte) (int, error) {
 			level = logrus.ErrorLevel
 		} else if strings.Contains(line, "level=warning") || strings.Contains(line, "level=warn") {
 			level = logrus.WarnLevel
+		}
+		// Only retain a fixed startup category, never a child log or address.
+		if w.startupPortConflict != nil && level == logrus.ErrorLevel {
+			text := strings.ToLower(line)
+			if strings.Contains(text, "listen ") && strings.Contains(text, "bind: address already in use") {
+				w.startupPortConflict.Store(true)
+			}
 		}
 		engine := w.engine
 		if engine == "" {
@@ -231,25 +239,26 @@ func routerCheckSingBoxProfile(ctx context.Context, profile sbObject) error {
 }
 
 type routerSingBoxSession struct {
-	engine      string
-	dnsBridge   *mhDNSBridge
-	hasTor      bool
-	mu          sync.Mutex
-	cmd         *exec.Cmd
-	done        chan error
-	exit        chan struct{}
-	ports       sbPorts
-	dir         string
-	conf        *daeConfig.Config
-	dirs        []string
-	transparent bool
-	log         *logrus.Logger
-	replacement *routerSingBoxSession
-	owned       bool
-	ready       atomic.Bool
-	statsMu     sync.Mutex
-	stats       *RuntimeOverview
-	samples     []RuntimeTrafficSample
+	engine       string
+	dnsBridge    *mhDNSBridge
+	hasTor       bool
+	mu           sync.Mutex
+	cmd          *exec.Cmd
+	done         chan error
+	exit         chan struct{}
+	ports        sbPorts
+	dir          string
+	conf         *daeConfig.Config
+	dirs         []string
+	transparent  bool
+	log          *logrus.Logger
+	replacement  *routerSingBoxSession
+	owned        bool
+	ready        atomic.Bool
+	portConflict atomic.Bool
+	statsMu      sync.Mutex
+	stats        *RuntimeOverview
+	samples      []RuntimeTrafficSample
 }
 
 func newRouterSingBoxSession(ctx context.Context, log *logrus.Logger, conf *daeConfig.Config, dirs []string, transparent bool, profileHooks ...func(sbObject, sbPorts)) (routerCoreSession, error) {
@@ -377,7 +386,7 @@ func newRouterNativeSession(ctx context.Context, log *logrus.Logger, conf *daeCo
 	}
 	s.cmd.Env = append(s.cmd.Env, "PATH="+emptyPath)
 	s.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGTERM}
-	writer := &sbLogWriter{log: log, engine: engine}
+	writer := &sbLogWriter{log: log, engine: engine, startupPortConflict: &s.portConflict}
 	s.cmd.Stdout = writer
 	s.cmd.Stderr = writer
 	for _, l := range reserved {
@@ -465,6 +474,9 @@ func (s *routerSingBoxSession) Ready(ctx context.Context) error {
 		}
 		select {
 		case <-s.exit:
+			if s.portConflict.Load() {
+				return errors.New("core_ports_unavailable")
+			}
 			return errors.New("core_start_failed")
 		case <-ctx.Done():
 			return errors.New("core_not_ready")

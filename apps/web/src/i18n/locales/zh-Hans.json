@@ -277,6 +277,7 @@
       "extension": "缺少扩展组件",
       "torBootstrap": "Tor 引导失败",
       "udpUnsupported": "不支持 UDP",
+      "ports": "测试端口繁忙",
       "nodeConnect": "节点连接超时",
       "tlsHandshake": "TLS 握手超时",
       "websocket": "WebSocket 握手失败",

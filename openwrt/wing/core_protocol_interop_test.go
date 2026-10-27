@@ -18,6 +18,7 @@ import (
 
 	"github.com/daeuniverse/dae-wing/routercore"
 	daeConfig "github.com/daeuniverse/dae/config"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/net/proxy"
 )
 
@@ -201,6 +202,53 @@ func TestRouterCoreProtocolInteroperability(t *testing.T) {
 			}
 		})
 	}
+	t.Run("private-listener-collision", func(t *testing.T) {
+		busy, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer busy.Close()
+		privateConf, _, _, err := routerProbeConfiguration([]string{cases[0].Link}, global)
+		if err != nil {
+			t.Fatal(err)
+		}
+		log := logrus.New()
+		log.SetOutput(io.Discard)
+		attempts := 0
+		var failed *routerSingBoxSession
+		recovered, err := routerStartPrivateProbe(ctx, func() (routerCoreSession, error) {
+			attempts++
+			s, e := newRouterNativeSession(ctx, log, privateConf, nil, false, "sing-box", func(profile sbObject, _ sbPorts) {
+				if attempts == 1 {
+					profile["experimental"].(sbObject)["clash_api"].(sbObject)["external_controller"] = busy.Addr().String()
+				}
+			})
+			if attempts == 1 && e == nil {
+				failed = s.(*routerSingBoxSession)
+			}
+			return s, e
+		})
+		if err != nil {
+			t.Fatal("actual native listener collision did not recover", attempts, err)
+		}
+		defer routerStopProbe(recovered)
+		if attempts != 2 || failed == nil {
+			t.Fatal("native startup bypassed the controlled collision", attempts)
+		}
+		select {
+		case <-failed.exit:
+		default:
+			t.Fatal("failed private process survived its replacement")
+		}
+		if _, err := os.Stat(failed.dir); !os.IsNotExist(err) {
+			t.Fatal("failed private configuration directory survived", err)
+		}
+		if connection, err := net.DialTimeout("tcp4", busy.Addr().String(), time.Second); err != nil {
+			t.Fatal("recovery modified the unrelated occupied listener", err)
+		} else {
+			connection.Close()
+		}
+	})
 	if os.Getenv("DAED_TEST_SINGBOX_EXTRA") != "" {
 		t.Run("bounded-extra-batch", func(t *testing.T) {
 			var link string
