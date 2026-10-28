@@ -84,7 +84,7 @@ export function RouterVersion() {
       <Button
         variant="outline"
         size="sm"
-        className="min-h-11 tabular-nums"
+        className="tabular-nums"
         onClick={show}
         aria-label={`NaiLink 版本 ${data?.current || '读取中'}，检查更新`}
       >

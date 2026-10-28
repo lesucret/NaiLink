@@ -66,6 +66,9 @@ class BackendPrepareTests(unittest.TestCase):
         self.assertIn("return routerCheckConn(conn), nil", (self.root / "dae-core/component/outbound/dialer/dialer.go").read_text(encoding="utf-8"))
         self.assertEqual((self.root / "dae/runtime.go").read_bytes(), (ROOT / "openwrt/wing/runtime.go").read_bytes())
         self.assertIn("return c.routerRouteDial(ctx, p)", (self.root / "dae-core/control/dial.go").read_text(encoding="utf-8"))
+        self.assertEqual((self.root / "dae-core/control/dial.go").read_text(encoding="utf-8").count("c.routerChooseDialTarget(ctx, outboundIndex, dst, domain)"), 2)
+        for target, original in (("dae/router_core_memory.go", "core_memory.go"), ("dae-core/control/router_domain_first.go", "domain_first.go")):
+            self.assertEqual((self.root / target).read_bytes(), (ROOT / "openwrt/wing" / original).read_bytes())
         self.assertIn("routerDNSPrimaryTimeout(ctx, upstream, primaryDialArg)", (self.root / "dae-core/control/dns_control.go").read_text(encoding="utf-8"))
         expiry = (self.root / "dae-core/control/dns_control_cache_cleanup_test.go").read_text(encoding="utf-8")
         self.assertIn("ctrl.evictExpiredDnsCache(deadline.Add(time.Nanosecond))", expiry)

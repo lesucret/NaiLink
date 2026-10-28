@@ -151,7 +151,8 @@ def router_lifecycle(text):
 
 def router_control_dial(text):
     begin = text.index('func (c *ControlPlane) routeDial(')
-    return text[:begin] + '''func (c *ControlPlane) routeDial(ctx context.Context, p *proxyDialParam) (netproxy.Conn, *proxyDialResult, error) {
+    prefix = text[:begin].replace('c.ChooseDialTarget(outboundIndex, dst, domain)', 'c.routerChooseDialTarget(ctx, outboundIndex, dst, domain)')
+    return prefix + '''func (c *ControlPlane) routeDial(ctx context.Context, p *proxyDialParam) (netproxy.Conn, *proxyDialResult, error) {
     return c.routerRouteDial(ctx, p)
 }
 '''
@@ -507,6 +508,8 @@ type Mutation {
         ("dae/router_geodata_update.go", "geodata_update.go"),
         ("dae/router_geodata_update_test.go", "geodata_update_test.go"),
         ("dae/router_core_manager.go", "core_manager.go"),
+        ("dae/router_core_memory.go", "core_memory.go"),
+        ("dae/router_core_memory_test.go", "core_memory_test.go"),
         ("dae/router_core_capabilities.go", "core_capabilities.go"),
         ("dae-core/control/router_core_listener.go", "core_listener.go"),
         ("dae-core/control/router_core_listener_test.go", "core_listener_test.go"),
@@ -574,6 +577,8 @@ type Mutation {
     for relative, source in (
         ("dae-core/control/router_connection.go", "connection_recovery.go"),
         ("dae-core/control/router_connection_test.go", "connection_recovery_test.go"),
+        ("dae-core/control/router_domain_first.go", "domain_first.go"),
+        ("dae-core/control/router_domain_first_test.go", "domain_first_test.go"),
         ("dae-core/control/router_dns_transport.go", "dns_transport.go"),
         ("dae-core/control/router_dns_transport_test.go", "dns_transport_test.go"),
         ("dae-core/control/router_dns_stability.go", "dns_stability.go"),

@@ -15,7 +15,7 @@
 
 管理节点、订阅和群组，测试节点延迟，查看实时流量，配置 DNS 与路由。支持电脑、手机和多种主题，沿用路由器 LuCI 登录，无需另设账户。
 
-基于 [daed](https://github.com/daeuniverse/daed) 二次开发，独立维护。当前版本为 **[0.6.44 测试版](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.44)**，提供 IPK / APK v3 安装包。
+基于 [daed](https://github.com/daeuniverse/daed) 二次开发，独立维护。当前版本为 **[0.6.45 测试版](https://github.com/slobys/NaiLink/releases/tag/openwrt-v0.6.45)**，提供 IPK / APK v3 安装包。
 
 新增 **mihomo 内核切换**，与 dae、sing-box 共用节点、订阅和配置。按需下载，切换前检查兼容性和实际连接，失败自动尝试恢复原内核。支持 x86_64 / ARM64。[支持范围与限制 →](docs/core-switching.md)
 
@@ -36,7 +36,7 @@
 以 **root** 登录路由器 SSH，执行下面一行，打开中文菜单：
 
 ```sh
-uclient-fetch -O /tmp/nailink-install.sh https://github.com/slobys/NaiLink/releases/download/openwrt-v0.6.44/install.sh && sh /tmp/nailink-install.sh --menu --release openwrt-v0.6.44
+uclient-fetch -O /tmp/nailink-install.sh https://github.com/slobys/NaiLink/releases/download/openwrt-v0.6.45/install.sh && sh /tmp/nailink-install.sh --menu --release openwrt-v0.6.45
 ```
 
 选择 **1 安装 / 更新**。安装后运行 `nailink` 可再次打开菜单，也可选择 **2 卸载**、**3 检查环境** 或 **0 退出**。
@@ -51,13 +51,15 @@ uclient-fetch -O /tmp/nailink-install.sh https://github.com/slobys/NaiLink/relea
 
 保留 0.6.30 的代理就绪检查与有效 DNS 分流关联恢复，可用 `nailink --check-network` 查看诊断。[恢复机制与限制 →](https://slobys.github.io/NaiLink/maintenance.html#restart-recovery)
 
-旧版菜单遇到 Raw 下载失败时，可运行 `nailink --install --release openwrt-v0.6.44`。如果 GitHub 也无法解析，先检查路由器自身 DNS。[下载故障排查 →](https://slobys.github.io/NaiLink/troubleshooting.html#download)
+旧版菜单遇到 Raw 下载失败时，可运行 `nailink --install --release openwrt-v0.6.45`。如果 GitHub 也无法解析，先检查路由器自身 DNS。[下载故障排查 →](https://slobys.github.io/NaiLink/troubleshooting.html#download)
 
 **0.6.42 修复 Clash 订阅**：支持内嵌 `proxies` 的 YAML / JSON、SIP008 和普通 / Base64 节点列表；更新失败保留原节点，内容未变时保留节点 ID。仅提取节点，不导入订阅中的 DNS、路由或监听设置。[格式与限制 →](https://slobys.github.io/NaiLink/nodes.html#clash)
 
 **0.6.43 优化节点测试**：三内核普通节点手动 HTTP 测试统一最多 8 秒，减少慢节点误判；增加连接、TLS / WebSocket 握手和入口网关错误提示。自动选路及现有配置保持。[超时排查说明 →](https://slobys.github.io/NaiLink/troubleshooting.html#node-timeout)
 
 **0.6.44 优化 mihomo DNS**：复用有上限的 TCP / 加密 DNS 连接，缓冲短时查询突发；失效连接按原路由重建，停止内核时释放连接与排队请求。同时修复私有节点测试启动时的端口争用恢复。节点、DNS 上游与分流配置保留。[说明 →](https://slobys.github.io/NaiLink/troubleshooting.html#dns-stability)
+
+**0.6.45 内核管理与稳定性**：统一顶部按钮高度，重新设计内核窗口，显示实际常驻内存；释放切换及重载后的旧会话引用，修复旧 DNS 地址下 dae 首次连接可能超时的问题。节点和配置保留。[使用说明 →](docs/core-switching.md)
 
 ## 开始使用
 
@@ -71,7 +73,7 @@ uclient-fetch -O /tmp/nailink-install.sh https://github.com/slobys/NaiLink/relea
 
 ## 源码与交流
 
-[完整源码包](https://github.com/slobys/NaiLink/releases/download/openwrt-v0.6.44/daed-openwrt-source.tar.gz) · [构建说明](openwrt/README.md#开发) · [验证记录](openwrt/VALIDATION.md) · [Logo](docs/site/assets/nailink-logo.png)
+[完整源码包](https://github.com/slobys/NaiLink/releases/download/openwrt-v0.6.45/daed-openwrt-source.tar.gz) · [构建说明](openwrt/README.md#开发) · [验证记录](openwrt/VALIDATION.md) · [Logo](docs/site/assets/nailink-logo.png)
 
 编译请使用完整源码包，或 `git clone --recurse-submodules https://github.com/slobys/NaiLink.git`。GitHub 的 Download ZIP 不包含后端子模块。
 

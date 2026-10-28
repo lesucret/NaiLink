@@ -1348,6 +1348,10 @@ form {
   justify-content: flex-end;
   min-width: 0;
 }
+.router-toolbar-actions > [data-slot='button'] {
+  height: 40px;
+  min-height: 40px;
+}
 .community-link {
   display: inline-flex;
   align-items: center;
@@ -1370,12 +1374,23 @@ form {
   outline: 2px solid var(--ring);
   outline-offset: 3px;
 }
+@media (pointer: coarse) {
+  .router-toolbar-actions > [data-slot='button'],
+  .community-link {
+    height: 44px;
+    min-height: 44px;
+  }
+}
 @media (max-width: 900px) {
   .router-toolbar {
     grid-template-columns: minmax(0, 1fr) auto;
   }
   .router-toolbar-actions {
     grid-column: 1 / -1;
+  }
+  .router-toolbar-actions > [data-slot='button'] {
+    height: 44px;
+    min-height: 44px;
   }
   .community-link {
     min-height: 44px;

@@ -226,7 +226,18 @@ func routerMarkServing(plane *control.ControlPlane) {
 func routerCloseControlPlane(plane *control.ControlPlane) error {
 	routerLifecycleMu.Lock()
 	defer routerLifecycleMu.Unlock()
-	return plane.Close()
+	err := plane.Close()
+	if err == nil {
+		// Release the retired generation reference and its remaining subobjects.
+		// Clear only this generation; a hot reload may have published its successor.
+		if routerServingPlane == plane {
+			routerServingPlane = nil
+		}
+		if currentControlPlane.CompareAndSwap(plane, nil) {
+			routerConfigured = false
+		}
+	}
+	return err
 }
 
 type RouterReadiness struct {

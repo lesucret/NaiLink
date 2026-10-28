@@ -1,11 +1,26 @@
-import { useIsMutating, useQueryClient } from '@tanstack/react-query'
-import { Cpu, LoaderCircle } from 'lucide-react'
+import { useIsMutating, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ArrowRight, Check, ChevronDown, Cpu, Download, LoaderCircle, RefreshCw, ShieldCheck } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '~/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '~/components/ui/dialog'
+import { useGQLQueryClient } from '~/contexts'
 import { useRouterMaintenance } from '~/hooks/useRouterMaintenance'
+import { cn } from '~/lib/utils'
 import { coreProblemLabel, maintenanceMessages } from '~/utils/router-maintenance'
 
+const cores = ['dae', 'sing-box', 'mihomo'] as const
+type CoreName = (typeof cores)[number]
+interface LiveCore {
+  current: string
+  runtime: string
+  running?: boolean
+  memory?: { backend_kib: number; native_kib?: number; total_kib: number; complete: boolean }
+}
+const descriptions = {
+  dae: 'eBPF 接管 · 内置内核',
+  'sing-box': 'TUN 接管 · 多协议支持',
+  mihomo: 'TUN 接管 · Clash 生态',
+}
 function problemLabel(value: string) {
   return (
     maintenanceMessages[value] ||
@@ -15,8 +30,8 @@ function problemLabel(value: string) {
         unsupported_dns_option: '当前 DNS 使用了尚未适配的响应规则、固定 TTL 或缓存容量设置。',
         unsupported_group_policy: '当前群组策略尚未适配。',
         unsupported_group_policy_parameter: '当前群组使用了尚未适配的策略参数。',
-        invalid_fixed_group: '首版仅支持固定群组中只有一个节点；自动选择群组可包含多个节点。原群组保持不变。',
-        unsupported_multi_wan: '当前配置指定了多个 WAN 接口，首版尚不能等价转换。',
+        invalid_fixed_group: '固定群组暂仅支持一个节点；自动选择群组可包含多个节点。原群组保持不变。',
+        unsupported_multi_wan: '当前配置指定了多个 WAN 接口，暂不能等价转换。',
         geodata_missing: '找不到当前配置引用的规则库。',
         missing_lan_interface: '请先配置并应用需要接管的 LAN 接口。',
         core_starting: '当前内核尚未就绪，请恢复服务后再检查。',
@@ -26,21 +41,32 @@ function problemLabel(value: string) {
     coreProblemLabel(value)
   )
 }
+
 export function RouterCore() {
   const [open, setOpen] = useState(false)
-  const [target, setTarget] = useState<'dae' | 'sing-box' | 'mihomo'>('sing-box')
+  const [target, setTarget] = useState<CoreName>('dae')
   const { query, mutation, busy } = useRouterMaintenance()
   const pendingMutations = useIsMutating()
   const core = query.data?.cores
   const client = useQueryClient()
+  const gql = useGQLQueryClient()
+  const live = useQuery({
+    queryKey: ['router-core-live'],
+    enabled: open,
+    queryFn: async () => {
+      const value = await gql.request<{ coreStatus: string }>('{coreStatus}')
+      return JSON.parse(value.coreStatus) as LiveCore
+    },
+    retry: false,
+    refetchInterval: open ? (busy ? 2000 : 10000) : false,
+  })
   const lastCore = useRef<string | undefined>(undefined)
   useEffect(() => {
     if (!core?.current) return
     if (lastCore.current && lastCore.current !== core.current) client.invalidateQueries()
     lastCore.current = core.current
   }, [client, core?.current])
-  const current =
-    core?.current === 'sing-box' || core?.current === 'mihomo' || core?.current === 'dae' ? core.current : '未知'
+  const current = cores.includes(core?.current as CoreName) ? (core!.current as CoreName) : undefined
   const plan = core?.plan?.target === target ? core.plan : undefined
   const selectedCore =
     target === 'dae'
@@ -52,176 +78,330 @@ export function RouterCore() {
   const repairCore = plan?.problems?.includes(
     target === 'mihomo' ? 'mihomo_version_mismatch' : 'singbox_version_mismatch',
   )
+  const installed = target === 'dae' || !!selectedCore?.installed
   const job = query.data?.job
-  const coreJob = job?.action.startsWith('core_') ? job : undefined
   const suffix = target === 'sing-box' ? 'singbox' : target
+  const coreJob =
+    job?.action.startsWith('core_') &&
+    (busy || job.action.endsWith(`_${suffix}`) || (target === 'sing-box' && job.action === 'core_install_extra'))
+      ? job
+      : undefined
   const ready = !!plan?.compatible && /^[a-f0-9]{64}$/i.test(plan.revision)
   const blocked =
-    busy || pendingMutations > 0 || query.isError || !core || (target !== 'dae' && !selectedCore?.supported)
+    busy ||
+    pendingMutations > 0 ||
+    query.isError ||
+    !core ||
+    !current ||
+    (target !== 'dae' && !selectedCore?.supported) ||
+    (open && (live.isPending || live.isError || live.data?.runtime !== 'ready' || live.data?.current !== current))
+  const memory = live.data?.runtime === 'ready' && live.data.current === current ? live.data.memory : undefined
+  const resident =
+    memory?.complete && Number.isFinite(memory.total_kib) && memory.total_kib >= 0
+      ? (memory.total_kib / 1024).toFixed(0)
+      : undefined
+  const coreMessage =
+    coreJob?.state === 'error'
+      ? maintenanceMessages[coreJob.code || ''] || maintenanceMessages.operation_failed
+      : coreJob?.state === 'success'
+        ? coreJob.action.startsWith('core_switch_')
+          ? `切换完成，当前内核：${current || '读取中'}`
+          : coreJob.action === 'core_install_extra'
+            ? '扩展协议包已安装，现有节点和配置保留。'
+            : coreJob.action.startsWith('core_install_')
+              ? '内核已安装，请检查兼容性后再切换。'
+              : undefined
+        : coreJob
+          ? '正在处理，请勿断电。关闭窗口后，后台任务仍会继续。'
+          : undefined
+  const refresh = () => {
+    query.refetch()
+    live.refetch()
+  }
   return (
     <>
       <Button
         variant="outline"
         size="sm"
-        className="min-h-11"
-        aria-label={`代理内核 ${current}，检查和切换`}
+        aria-label={`代理内核 ${current || '未知'}，检查和切换`}
         onClick={() => {
-          setTarget(current === 'sing-box' ? 'dae' : 'sing-box')
+          setTarget(current || 'dae')
           setOpen(true)
           query.refetch()
         }}
       >
         <Cpu className="h-4 w-4" aria-hidden="true" />
-        内核 {current}
+        内核 {current || '未知'}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[88dvh] overflow-auto sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>代理内核</DialogTitle>
-            <DialogDescription>
-              保留节点、订阅和现有配置，仅切换当前运行配置。未应用的修改继续保留。切换会短暂断连，失败自动尝试恢复原内核，请勿断电。
+        <DialogContent
+          className="flex max-h-[90dvh] flex-col gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-[600px]"
+          data-core-dialog
+        >
+          <DialogHeader className="shrink-0 border-b px-5 py-5 text-left sm:px-6">
+            <DialogTitle className="text-xl tracking-tight">代理内核</DialogTitle>
+            <DialogDescription className="pr-5 text-sm leading-relaxed">
+              选择适合当前节点的内核，检查通过后再切换。
             </DialogDescription>
           </DialogHeader>
-          <p className="text-sm">
-            当前内核：<strong>{current}</strong>
-            {current !== 'dae' &&
-              current !== '未知' &&
-              core &&
-              ` · ${core.engines?.[current]?.version || core.version}`}
-          </p>
-          {core?.code && (
-            <p role="status" className="text-sm text-muted-foreground">
-              {maintenanceMessages[core.code] || coreProblemLabel(core.code)}
-            </p>
-          )}
-          <div className="grid grid-cols-3 gap-2" role="group" aria-label="目标内核">
-            {(['dae', 'sing-box', 'mihomo'] as const).map((name) => (
-              <Button
-                key={name}
-                variant={target === name ? 'default' : 'outline'}
-                className="min-h-14 whitespace-normal px-2 text-xs sm:text-sm"
-                aria-pressed={target === name}
-                disabled={
-                  busy ||
-                  (name !== 'dae' &&
-                    (core?.engines?.[name]?.supported ?? (name === 'sing-box' && core?.supported)) === false)
-                }
-                onClick={() => setTarget(name)}
-              >
-                {name}
-                {name === current && ' · 当前'}
-              </Button>
-            ))}
-          </div>
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            dae 使用 eBPF 接管；sing-box、mihomo 按需安装固定版本，使用 TUN / nftables，支持 x86_64、ARM64。
-            每次只运行一种内核，切换前检查实际配置和连接，失败尝试恢复原内核。不兼容参数会列出并阻止切换。
-          </p>
-          {target !== 'dae' && (!selectedCore?.installed || repairCore) && (
-            <section className="space-y-2" aria-label="安装可选内核">
-              <p className="text-xs text-muted-foreground">
-                {target} · {selectedCore?.version || '—'}；按需下载，不使用时不运行。安装前请预留 180 MiB 可用存储。
+          <div className="min-h-0 space-y-5 overflow-y-auto px-5 py-5 sm:px-6" data-core-dialog-body>
+            <section className="rounded-xl bg-muted/45 p-4" aria-label="当前内核运行状态">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm text-muted-foreground">
+                  当前内核：<strong className="ml-1 text-base text-foreground">{current || '读取中'}</strong>
+                  {current && current !== 'dae' && (
+                    <span className="ml-2 text-xs">{core?.engines?.[current]?.version || core?.version}</span>
+                  )}
+                </p>
+                <span
+                  className={cn(
+                    'inline-flex items-center gap-1.5 text-xs font-medium',
+                    live.data?.runtime === 'ready' ? 'text-emerald-700 dark:text-emerald-300' : 'text-muted-foreground',
+                  )}
+                >
+                  <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
+                  {live.isPending
+                    ? '正在读取'
+                    : live.isError
+                      ? '状态未确认'
+                      : live.data?.runtime === 'ready'
+                        ? live.data?.running === false
+                          ? '代理未启用'
+                          : '运行就绪'
+                        : '等待恢复'}
+                </span>
+              </div>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground" data-core-memory>
+                {resident
+                  ? `常驻内存约 ${resident} MiB · ${current === 'dae' ? '包含内置内核和管理服务' : '管理服务与当前内核合计'}`
+                  : '安装的其他内核不使用时不会运行。'}
               </p>
-              <Button
-                className="min-h-11 w-full whitespace-normal"
-                disabled={blocked || current === target}
-                onClick={() => mutation.mutate(target === 'mihomo' ? 'core_install_mihomo' : 'core_install_singbox')}
-              >
-                {repairCore ? `重新安装 ${target}（请先切换到其他内核）` : `下载并安装 ${target}（保留当前内核运行）`}
-              </Button>
             </section>
-          )}
-          {target === 'sing-box' && (
-            <section className="space-y-2 rounded-lg border p-3 text-sm" aria-label="扩展协议组件">
-              <p className="font-medium">Naive · WireGuard · Tor</p>
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                {core?.extra ? `扩展协议包已安装 · ${core.extra_version}` : '扩展协议包尚未安装'}。 仅 x86_64 / ARM64
-                可用，下载约 30 MiB，请预留 400 MiB 存储。 不使用时不启动 Tor。Tor 仅支持 TCP，首次引导可能需要数分钟。
-              </p>
-              {!core?.extra && (
+            <section aria-label="选择目标内核">
+              <div className="mb-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span>选择内核</span>
+                <span>每次仅运行一个代理内核</span>
+              </div>
+              <div className="overflow-hidden rounded-xl border" role="group" aria-label="目标内核">
+                {cores.map((name) => {
+                  const optional =
+                    name === 'dae'
+                      ? undefined
+                      : core?.engines?.[name] ||
+                        (name === 'sing-box' && core
+                          ? { installed: core.installed, supported: core.supported, version: core.version }
+                          : undefined)
+                  const unsupported = name !== 'dae' && optional?.supported === false
+                  return (
+                    <button
+                      key={name}
+                      type="button"
+                      aria-label={name}
+                      aria-pressed={target === name}
+                      disabled={busy || unsupported}
+                      className={cn(
+                        'group flex min-h-[76px] w-full items-center gap-3 border-b px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-muted/45 focus-visible:relative focus-visible:z-10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none',
+                        target === name && 'bg-primary/5',
+                      )}
+                      onClick={() => setTarget(name)}
+                      data-core-option={name}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={cn(
+                          'flex size-5 shrink-0 items-center justify-center rounded-full border',
+                          target === name
+                            ? 'border-primary bg-primary text-primary-foreground'
+                            : 'border-muted-foreground/35',
+                        )}
+                      >
+                        {target === name && <Check className="size-3" />}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-semibold">{name}</span>
+                        <span className="mt-0.5 block text-xs text-muted-foreground">{descriptions[name]}</span>
+                      </span>
+                      <span
+                        className={cn(
+                          'shrink-0 rounded-md px-2 py-1 text-[11px] font-medium',
+                          current === name
+                            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                            : 'bg-muted text-muted-foreground',
+                        )}
+                      >
+                        {current === name
+                          ? '正在使用'
+                          : unsupported
+                            ? '架构不支持'
+                            : name === 'dae' || optional?.installed
+                              ? '可用'
+                              : '需下载'}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </section>
+            {target !== 'dae' && (!installed || repairCore) && (
+              <section className="space-y-2 text-sm" aria-label="安装可选内核">
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  {target} · {selectedCore?.version || '—'}，安装前请预留 180 MiB 可用存储。下载失败不会停止当前代理。
+                </p>
                 <Button
                   variant="outline"
-                  className="min-h-11 w-full whitespace-normal"
-                  disabled={blocked || current === 'sing-box'}
-                  onClick={() => mutation.mutate('core_install_extra')}
+                  className="min-h-11 w-full"
+                  disabled={blocked || current === target}
+                  onClick={() => mutation.mutate(target === 'mihomo' ? 'core_install_mihomo' : 'core_install_singbox')}
                 >
-                  {current === 'sing-box' ? '请先切回 dae 再安装扩展包' : '按需安装扩展协议包'}
+                  <Download className="size-4" aria-hidden="true" />
+                  {repairCore ? `重新安装 ${target}` : `下载并安装 ${target}`}
                 </Button>
-              )}
-            </section>
-          )}
-          {plan && (
-            <section className="space-y-2 rounded-lg border p-3 text-sm" aria-label="内核兼容性报告">
-              <p className="font-medium">
-                {plan.compatible ? '兼容性检查通过' : '暂不能切换'} · {plan.nodes} 个运行节点 · {plan.groups} 个群组
+              </section>
+            )}
+            {plan && (
+              <section className="space-y-2 text-sm" aria-label="内核兼容性报告" aria-live="polite">
+                <p className={cn('flex items-center gap-2 font-medium', !plan.compatible && 'text-destructive')}>
+                  <ShieldCheck className="size-4 shrink-0" aria-hidden="true" />
+                  {plan.compatible ? '兼容性检查通过' : '暂不能切换'}
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {plan.nodes} 个节点 · {plan.groups} 个群组
+                  </span>
+                </p>
+                {!!plan.problems?.length && (
+                  <ul className="space-y-1 break-words rounded-lg bg-destructive/5 p-3 text-xs leading-relaxed text-destructive">
+                    {plan.problems.map((value, index) => (
+                      <li key={index}>{problemLabel(value)}</li>
+                    ))}
+                  </ul>
+                )}
+                {!!plan.warnings?.length && (
+                  <details className="rounded-lg border px-3 py-2 text-xs" data-core-behavior>
+                    <summary className="cursor-pointer py-1 font-medium">
+                      行为差异与注意事项（{plan.warnings.length}）
+                    </summary>
+                    <ul className="mt-2 list-disc space-y-2 pl-4 leading-relaxed text-muted-foreground">
+                      {plan.warnings.map((value, index) => (
+                        <li key={index}>{value}</li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </section>
+            )}
+            <details className="text-xs" data-core-details>
+              <summary className="flex min-h-8 cursor-pointer list-none items-center gap-1 text-muted-foreground">
+                安装、资源与切换说明
+                <ChevronDown className="size-3.5" aria-hidden="true" />
+              </summary>
+              <div className="mt-2 space-y-3 leading-relaxed text-muted-foreground">
+                <p>
+                  保留节点、订阅、群组和未应用的修改，仅切换当前运行配置。切换会短暂断连，失败自动尝试恢复原内核，请勿断电。
+                </p>
+                <p>
+                  dae 使用 eBPF；sing-box、mihomo 使用 TUN / nftables，目前支持
+                  x86_64、ARM64。安装程序占用存储空间，不等于同时占用运行内存。
+                </p>
+                <p>
+                  常驻内存来自管理服务和当前内核的
+                  RSS，共享页可能重复计数，合计为近似值，不包含系统可回收文件缓存。节点测试的临时进程可能另占内存，任务结束后释放。Tor
+                  运行时暂不显示不完整的合计。
+                </p>
+                {target === 'sing-box' && (
+                  <section className="space-y-2 border-t pt-3" aria-label="扩展协议组件">
+                    <p className="font-medium text-foreground">Naive · WireGuard · Tor</p>
+                    <p>
+                      {core?.extra ? `扩展协议包已安装 · ${core.extra_version}` : '扩展协议包尚未安装'}。仅 x86_64 /
+                      ARM64，下载约 30 MiB，预留 400 MiB 存储。不使用时不启动 Tor；Tor 仅支持
+                      TCP，首次引导可能需要数分钟。
+                    </p>
+                    {!core?.extra && (
+                      <Button
+                        variant="outline"
+                        className="min-h-11 w-full whitespace-normal"
+                        disabled={blocked || current === 'sing-box'}
+                        onClick={() => mutation.mutate('core_install_extra')}
+                      >
+                        {current === 'sing-box' ? '请先切回其他内核再安装扩展包' : '按需安装扩展协议包'}
+                      </Button>
+                    )}
+                  </section>
+                )}
+              </div>
+            </details>
+            {core?.code && core.code !== coreJob?.code && (
+              <p role="status" className="text-xs leading-relaxed text-muted-foreground">
+                {maintenanceMessages[core.code] || coreProblemLabel(core.code)}
               </p>
-              {!!plan.problems?.length && (
-                <ul className="space-y-1 break-words text-destructive">
-                  {plan.problems.map((value, index) => (
-                    <li key={index}>{problemLabel(value)}</li>
-                  ))}
-                </ul>
-              )}
-              {!!plan.warnings?.length && (
-                <div className="space-y-1 break-words text-muted-foreground">
-                  <p className="font-medium text-foreground">目标内核的行为差异</p>
-                  {plan.warnings.map((value, index) => (
-                    <p key={index}>{value}</p>
-                  ))}
-                </div>
-              )}
-            </section>
-          )}
-          {coreJob && (
-            <div
-              role={coreJob.state === 'error' ? 'alert' : 'status'}
-              className={`rounded-lg border p-3 text-sm ${coreJob.state === 'error' ? 'text-destructive' : 'bg-muted/40'}`}
-            >
-              <p className="flex items-start gap-2">
-                {busy && <LoaderCircle className="mt-0.5 h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />}
-                {coreJob.state === 'error'
-                  ? maintenanceMessages[coreJob.code || ''] || maintenanceMessages.operation_failed
-                  : coreJob.state === 'success'
-                    ? coreJob.action.startsWith('core_switch_')
-                      ? `切换完成，当前内核：${current}`
-                      : coreJob.action === 'core_install_extra'
-                        ? '扩展协议包已安装，现有节点和配置保留。'
-                        : coreJob.action === 'core_install_singbox' || coreJob.action === 'core_install_mihomo'
-                          ? '内核已安装，请检查兼容性后再切换。'
-                          : '兼容性检查完成，请查看报告。'
-                    : '正在检查、安装或切换；可关闭窗口，后台任务继续执行。'}
+            )}
+            {coreMessage && (
+              <div
+                role={coreJob?.state === 'error' ? 'alert' : 'status'}
+                className={cn(
+                  'flex items-start gap-2 rounded-lg p-3 text-xs leading-relaxed',
+                  coreJob?.state === 'error' ? 'bg-destructive/5 text-destructive' : 'bg-muted/50',
+                )}
+              >
+                {busy && (
+                  <LoaderCircle
+                    className="mt-0.5 size-4 shrink-0 animate-spin motion-reduce:animate-none"
+                    aria-hidden="true"
+                  />
+                )}
+                {coreMessage}
+              </div>
+            )}
+            {(query.isError || mutation.isError || (!busy && live.isError)) && (
+              <p role="alert" className="break-words text-xs text-destructive">
+                {query.error?.message || mutation.error?.message || '无法确认当前内核运行状态，请重新读取状态。'}
               </p>
+            )}
+            {!busy && pendingMutations > 0 && (
+              <p role="status" className="text-xs text-muted-foreground">
+                请等待节点测试或其他保存操作完成后再切换。
+              </p>
+            )}
+          </div>
+          <div className="shrink-0 space-y-3 border-t bg-background px-5 py-4 sm:px-6">
+            <p className="flex items-center gap-2 text-xs text-muted-foreground" aria-label="切换步骤">
+              <span>选择内核</span>
+              <ArrowRight className="size-3" aria-hidden="true" />
+              <span className={ready ? 'text-foreground' : undefined}>检查兼容性</span>
+              <ArrowRight className="size-3" aria-hidden="true" />
+              <span>确认切换</span>
+            </p>
+            <div className="grid grid-cols-[44px_1fr_1fr] gap-2">
+              <Button
+                variant="outline"
+                className="min-h-11 px-0"
+                aria-label="重新读取状态"
+                title="重新读取状态"
+                disabled={query.isFetching || live.isFetching}
+                onClick={refresh}
+              >
+                <RefreshCw
+                  className={cn(
+                    'size-4',
+                    (query.isFetching || live.isFetching) && 'animate-spin motion-reduce:animate-none',
+                  )}
+                  aria-hidden="true"
+                />
+              </Button>
+              <Button
+                variant="outline"
+                className="min-h-11 px-2 text-xs sm:text-sm"
+                disabled={blocked || !installed}
+                onClick={() => mutation.mutate(`core_check_${suffix}`)}
+              >
+                检查兼容性
+              </Button>
+              <Button
+                className="min-h-11 px-2 text-xs sm:text-sm"
+                disabled={blocked || !ready || target === current}
+                onClick={() => mutation.mutate(`core_switch_${suffix}`)}
+              >
+                {target === current ? '正在使用' : `切换到 ${target}`}
+              </Button>
             </div>
-          )}
-          {(query.isError || mutation.isError) && (
-            <p role="alert" className="break-words text-sm text-destructive">
-              {query.error?.message || mutation.error?.message}
-            </p>
-          )}
-          {!busy && pendingMutations > 0 && (
-            <p role="status" className="text-sm text-muted-foreground">
-              请等待节点测试或其他保存操作完成后再切换。
-            </p>
-          )}
-          <div className="grid gap-2 sm:grid-cols-3">
-            <Button variant="outline" className="min-h-11" onClick={() => query.refetch()}>
-              重新读取状态
-            </Button>
-            <Button
-              variant="outline"
-              className="min-h-11"
-              disabled={blocked || (target !== 'dae' && !selectedCore?.installed)}
-              onClick={() => mutation.mutate(`core_check_${suffix}`)}
-            >
-              检查兼容性
-            </Button>
-            <Button
-              className="min-h-11"
-              disabled={blocked || !ready || target === current}
-              onClick={() => mutation.mutate(`core_switch_${suffix}`)}
-            >
-              切换到 {target}
-            </Button>
           </div>
         </DialogContent>
       </Dialog>

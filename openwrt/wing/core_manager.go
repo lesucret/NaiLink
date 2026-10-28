@@ -121,11 +121,16 @@ func RouterCoreStatus() string {
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	var memory *routerCoreMemory
+	if m.phase == "ready" {
+		memory = routerCoreResidentMemory(m.active, m.state.Current)
+	}
 	data, _ := json.Marshal(struct {
 		routercore.State
-		Runtime string `json:"runtime"`
-		Dry     bool   `json:"api_only"`
-	}{m.state, m.phase, m.dry})
+		Runtime string            `json:"runtime"`
+		Dry     bool              `json:"api_only"`
+		Memory  *routerCoreMemory `json:"memory,omitempty"`
+	}{m.state, m.phase, m.dry, memory})
 	return string(data)
 }
 func RouterCorePlan(ctx context.Context, target string) routercore.Plan {
@@ -517,11 +522,7 @@ func Run(log *logrus.Logger, conf *daeConfig.Config, dirs []string, disableTimes
 				continue
 			}
 			err = active.Reload(message)
-			if err == nil && message.Geodata == nil {
-				m.mu.Lock()
-				m.conf = message.Config
-				m.mu.Unlock()
-			}
+			m.finishReload(active, message, err)
 			message.Callback <- err
 		case <-done:
 			// A dead core must not leave its network resources in place or silently
@@ -553,6 +554,22 @@ func Run(log *logrus.Logger, conf *daeConfig.Config, dirs []string, disableTimes
 			_ = m.save(failedState, "failed")
 			log.Error("Active core exited; automatic recovery exhausted or unsafe; management API remains available")
 		}
+	}
+}
+
+func (m *routerCoreManager) finishReload(active routerCoreSession, message *ReloadMessage, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.active != active {
+		return
+	}
+	if native, ok := active.(*routerSingBoxSession); ok {
+		// Reload may replace the process on success or rollback. Do not retain
+		// the stopped wrapper and its old DNS matchers, logs and traffic samples.
+		m.active = native.current()
+	}
+	if err == nil && message.Geodata == nil {
+		m.conf = message.Config
 	}
 }
 
