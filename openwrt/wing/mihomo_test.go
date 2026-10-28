@@ -365,6 +365,19 @@ func TestRouterMihomoProtocolInteroperability(t *testing.T) {
 			if c.UDPAlt != "" {
 				g.UdpCheckDns = []string{c.UDPAlt}
 			}
+			// The UDP probe owns a new native process. Retire the stream client
+			// first: two WireGuard clients with the same fixture identity can
+			// roam the server peer between their different source ports.
+			// Keep the real UDP assertion and its production timeout unchanged.
+			transport.CloseIdleConnections()
+			if err := routerStopProbe(session); err != nil {
+				t.Fatal("stream fixture cleanup before independent UDP probe", err)
+			}
+			select {
+			case <-session.exit:
+			default:
+				t.Fatal("stream fixture process still alive before UDP probe")
+			}
 			r, e := ProbeRouterCoreUDP(ctx, c.Link, g)
 			if e != nil || !r.Alive {
 				t.Fatal("real UDP query failed", r, e)
